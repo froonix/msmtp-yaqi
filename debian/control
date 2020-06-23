@@ -9,5 +9,6 @@ Homepage: https://github.com/froonix/msmtp-yaqi
 Package: msmtp-yaqi
 Architecture: all
 Multi-Arch: foreign
+Provides: msmtpq, msmtp-queue
 Depends: ${misc:Depends}, ${shlibs:Depends}, msmtp
 Description: Yet Another Queue Implementation for MSMTP
