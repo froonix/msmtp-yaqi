@@ -1,0 +1,583 @@
+#!/usr/bin/env bash
+#########################################################################
+#                                                                       #
+# msmtp-yaqi: Yet Another Queue Implementation for MSMTP                #
+# --------------------------------------------------------------------- #
+# Inspired by msmtpq (Chris Gianniotis) and msmtpqueue (Martin Lambers) #
+#                                                                       #
+# This program is free software: you can redistribute it and/or modify  #
+# it under the terms of the GNU General Public License as published by  #
+# the Free Software Foundation, either version 3 of the License, or, at #
+# your option, any later version.                                       #
+#                                                                       #
+#########################################################################
+
+# Alias for echo command.
+# Redirect all to STDERR.
+stderr()
+{
+	echo "$@" 1>&2
+}
+
+# Debug:   log -d        [<MSG> ...]
+# Info:    log           [<MSG> ...]
+# Warning: log -w        [<MSG> ...]
+# Error:   log -e <CODE> [<MSG> ...]
+function log
+{
+	local msg exit=0 dbg=0
+	local facility=mail.
+
+	case "${1:-}"
+	in
+		-d)
+			facility+=debug
+			dbg=1
+			shift
+			;;
+
+		-e)
+			facility+=err
+			exit="${2:-1}"
+			shift 2
+			;;
+
+		-w)
+			facility+=warn
+			shift
+			;;
+
+		*)
+			facility+=info
+			;;
+	esac
+
+	[[ "$dbg" -eq 1 && "${cfg[DEBUG]}" -ne 1 ]] \
+	&& return
+
+	for msg in "$@"
+	do
+		[[ "${cfg[QUIET]}" -eq 0 ]] && stderr "$BASECMD: $msg"
+		[[ "${cfg[SYSLOG]}" -eq 1 ]] && logger -t "$BASECMD[$$]" -p "$facility" -- "$msg"
+		[[ -n "${cfg[LOGFILE]}" ]] && echo "[$(date +"${cfg[LOGFILE_TIME_FORMAT]}")] $msg" >> "${cfg[LOGFILE]}"
+	done
+
+	[[ "$exit" -ne 0 ]] \
+	&& log -d "exit $exit" \
+	&& exit "$exit"
+}
+
+# read_config <FILE>
+function read_config
+{
+	local c l k v;
+	declare -g -A cfg
+	local -A tmp
+
+	cfg[MSMTP]=msmtp
+	cfg[QUEUE]=.msmtpq
+	cfg[LOGFILE]=  # filename or empty
+	cfg[LOGFILE_TIME_FORMAT]="%Y-%m-%d %H:%M:%S"
+	cfg[SYSLOG]=0  # on|off
+	cfg[QUIET]=0   # on|off
+	cfg[DEBUG]=0   # on|off
+	cfg[DEFER]=300
+	cfg[UNDEV]=12
+
+	[[ ! -f "$1" ]] && return
+	c=$(egrep -v '^(#|$)' "$1")
+
+	for k in "${!cfg[@]}"
+	do
+		tmp["$k"]="${cfg[$k]}"
+	done
+
+	while IFS= read -r l
+	do
+		k=$(cut -d = -f 1 <<< "$l")
+		v=${l:$((${#k}+1))}
+		tmp[$k]="$v"
+	done <<< "$c"
+
+	[[ -z "${tmp[QUEUE]}" ]] \
+	&& log -e 1 "Empty QUEUE path in $(basename "$1")"
+
+	[[ -n "${tmp[QUEUE]}" && "${tmp[QUEUE]:0:1}" != "/" ]] \
+	&& cfg[QUEUE]="$HOME/${tmp[QUEUE]}" \
+	|| cfg[QUEUE]="${tmp[QUEUE]}" \
+
+	[[ ! -d "${tmp[QUEUE]}" || ! -w "${tmp[QUEUE]}" ]] \
+	&& log -e 1 "Invalid QUEUE path: ${tmp[QUEUE]}"
+
+	[[ -n "${tmp[LOGFILE]}" && "${tmp[LOGFILE]:0:1}" != "/" ]] \
+	&& cfg[LOGFILE]="$HOME/${tmp[LOGFILE]}" \
+	|| cfg[LOGFILE]="${tmp[LOGFILE]}"
+
+	[[ "${tmp[SYSLOG]}" == "on" ]] && cfg[SYSLOG]=1 || cfg[SYSLOG]=0
+	[[ "${tmp[QUIET]}" == "on" ]] && cfg[QUIET]=1 || cfg[QUIET]=0
+	[[ "${tmp[DEBUG]}" == "on" ]] && cfg[DEBUG]=1 || cfg[DEBUG]=0
+
+	cfg[DEFER]=$(printf '%d' "${tmp[DEFER]}")
+	[[ "${cfg[DEFER]}" -lt 0 ]] && cfg[DEFER]=0
+
+	cfg[UNDEV]=$(printf '%d' "${tmp[UNDEV]}")
+	[[ "${cfg[UNDEV]}" -lt 0 ]] && cfg[UNDEV]=0
+
+	log -d "Read configuration from file $1"
+	log -d "--------------------------------------------------"
+	log -d "  \$cfg[MSMTP]=${cfg[MSMTP]}"
+	log -d "  \$cfg[QUEUE]=${cfg[QUEUE]}"
+	log -d "  \$cfg[LOGFILE]=${cfg[LOGFILE]}"
+	log -d "  \$cfg[LOGFILE_TIME_FORMAT]=${cfg[LOGFILE_TIME_FORMAT]}"
+	log -d "  \$cfg[SYSLOG]=${cfg[SYSLOG]}"
+	log -d "  \$cfg[QUIET]=${cfg[QUIET]}"
+	log -d "  \$cfg[DEBUG]=${cfg[DEBUG]}"
+	log -d "  \$cfg[DEFER]=${cfg[DEFER]}"
+	log -d "  \$cfg[UNDEV]=${cfg[UNDEV]}"
+	log -d "--------------------------------------------------"
+}
+
+err()
+{
+	stderr -n "$BASECMD: "
+
+	if [[ "$#" -gt 0 ]]
+	then
+		for var in "$@"
+		do
+			stderr "$var"
+		done
+	else
+		stderr
+	fi
+
+	exit 1
+}
+
+# Trap callback.
+function cleanup
+{
+	[[ -n "${queue_file:-}" ]] \
+	&& log -d "Removing stale queue file: $queue_file" \
+	&& rm -f "$queue_file" && unset queue_file
+
+	[[ -n "${locked:-}" ]] \
+	&& lock_queue -u 2>/dev/null
+}
+
+# Lock queue directory.
+# Use -u to unlock it!
+lock_queue()
+{
+	local LOK="${cfg[QUEUE]}/.lock"
+	local -i MAX=240 SEC=0
+
+	if [[ -z "${1:-}" ]]
+	then
+		mkdir "$LOK" 2>/dev/null && locked=t
+
+		while [ -z "$locked" ] && (( SEC < MAX ))
+		do
+			sleep 1
+			(( ++SEC ))
+			mkdir "$LOK" 2>/dev/null && locked=t
+		done
+
+		[ -z "$locked" ] && \
+			err '' "cannot use queue ${cfg[QUEUE]} : waited $MAX seconds for"\
+				   "  lockdir [ $LOK ] to vanish ; giving up"\
+				   'if you are certain that no other instance of this script'\
+				   "  is running, then 'rmdir' the lock dir manually" '' # lock file still there, give up
+
+	elif [[ "$1" == '-u' ]]
+	then
+		log -d "Removing lockfile: $LOK"
+		rmdir "$LOK"
+		unset locked
+	fi
+}
+
+function purge_queue
+{
+	for file in "${cfg[QUEUE]}"/*-*-*,*
+	do
+		[[ ! -f "$file" ]] && continue
+		purge_mails "$(basename "$file" | cut -d , -f 1)"
+	done
+}
+
+function run_queue
+{
+	[[ "${1:-}" == "-f" ]] \
+	&& flush=1 || flush=0
+	shift
+
+	local f t m c=$(date +%s)
+	for file in "${cfg[QUEUE]}"/*-*-*,*
+	do
+		[[ ! -f "$file" ]] \
+		&& continue
+
+		b=$(basename "$file")
+		f=$(cut -d , -f 1 <<< "$b")
+		t=$(cut -d , -f 2 <<< "$b")
+		m=$(stat -c %Y "$file")
+
+		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "$t" -gt 0 && "$((c-m))" -lt "$((2**(t-1)*cfg[DEFER]))" ]]
+		then
+			log -d "Deferring next delivery try: ID $f (c=$c, m=$m, t=$t)"
+			continue
+		fi
+
+		send_mails "$f"
+
+		# save exit code!
+		# ...
+	done
+
+	# exit code
+	# ...
+}
+
+## send a queued mail out via msmtp
+##
+send_mails()
+{
+	for q in "$@"
+	do
+		q=$(basename "$q")
+		file=""
+
+		for f in "${cfg[QUEUE]}/$q",*
+		do
+			if [[ -f "$f" ]]
+			then
+				file=$f
+				break;
+			fi
+		done
+
+		if [[ -z "$file" ]]
+		then
+			# exit code?
+			# ...
+
+			stderr "Queue ID $q not found."
+
+			continue
+		fi
+
+		get_header "$file"
+		get_content "$file"
+
+		if /bin/false "${cfg[MSMTP]}" $queue_header <<< "$queue_content"
+		then
+			log "Queued message sent: ID $q"
+			purge_mails "$q"
+		else
+			RC=$?
+			counter=$(cut -d , -f 2 <<< "$(basename "$file")")
+			log "Failed to send queued message: ID $q (try=$((counter+1)); status=$RC)"
+			mv "$file" "${cfg[QUEUE]}/$q,$((counter+1))"
+		fi
+		return $RC
+	done
+
+	# exit code?
+	# ...
+}
+
+# ...
+purge_mails()
+{
+	for q in "$@"
+	do
+		q=$(basename "$q")
+		file=""
+
+		for f in "${cfg[QUEUE]}/$q",*
+		do
+			if [[ -f "$f" ]]
+			then
+				file=$f
+				break;
+			fi
+		done
+
+		if [[ -z "$file" ]]
+		then
+			# exit code?
+			# ...
+
+			stderr "Queue ID $q not found."
+
+			continue
+		fi
+
+		rm -f "$file" || log -e "$?" "Failed to remove message from queue: ID $q"
+		log "Removed message from queue: ID $q"
+	done
+
+	# exit code
+	# ...
+}
+
+## get_queue [<ID> ...]
+#function get_queue
+#{
+#	local w
+#	unset queue_files
+#	declare -g -a queue_files
+#
+#	[[ "$#" -gt 0 ]] \
+#	&& w='*' \
+#	|| w=
+#
+#		for f in "${cfg[QUEUE]}/$q"$w,*
+#		do
+#			if [[ -f "$f" ]]
+#			then
+#				file=$f
+#				break;
+#			fi
+#		done
+#
+#		if [[ -z "$file" ]]
+#		then
+#			# exit code?
+#			# ...
+#
+#			stderr "Queue ID $q not found."
+#
+#			continue
+#		fi
+#}
+
+# Display queue contents.
+display_queue()
+{
+	local -i i=0
+	local -i tries=0
+	local -i current=$(date +%s)
+	local -i modified
+	local -i defer
+	local basename
+	local id
+
+	for file in "${cfg[QUEUE]}"/*-*-*,*
+	do
+		[[ ! -f "$file" ]] \
+		&& continue
+
+		basename=$(basename "$file")
+		id=$(cut -d , -f 1 <<< "$basename")
+		tries=$(cut -d , -f 2 <<< "$basename")
+
+		echo
+		((i++))
+		((tries++))
+		get_content "$file"
+
+		echo -n "Message #$i in queue"
+		[[ "$tries" -gt 1 ]] && echo " (try $tries)" || echo
+		echo "ID $id"
+
+		echo -n "   Date: "; date -d "@$(stat -c %Y "$file")" +'%Y-%m-%d %H:%M:%S %z'
+
+		if [[ "$tries" -gt 1 && "${cfg[DEFER]}" -gt 0 ]]
+		then
+			modified=$(stat -c %Y "$file")
+			defer=$((2**(tries-2)*cfg[DEFER]))
+
+			[[ "$((current-modified))" -lt "$defer" ]] \
+			&& printf "   Deferred: %s\n" "$(date -d @"$((modified+defer))" +'%Y-%m-%d %H:%M:%S %z')"
+		fi
+
+		'egrep' -s -h -i '^(Subject|From|To|CC|BCC):' <<< "$queue_content" | sort -i | sed 's/^/   /'
+		printf "   -- %dB (%dkB)\n" "$(wc -c <<< "$queue_content")" "$(du -k "$file" | cut -f 1)"
+	done
+
+	[[ "$i" -eq 0 ]] \
+	&& err 'No mail in queue'
+
+	echo
+}
+
+# Get msmtp argument list from queue file.
+get_header()
+{
+	queue_header=$(head -n 1 "$1" 2>/dev/null)
+	[[ -z "$queue_header" ]] && log -e "$?" "Could not read header from queue file $1"
+}
+
+# Get real mail content from queue file.
+get_content()
+{
+	queue_content=$(tail -n +2 "$1" 2>/dev/null)
+	[[ -z "$queue_content" ]] && log -e "$?" "Could not read content from queue file $1"
+}
+
+# Insert mail from STDIN into queue.
+# Queue locking not required here!
+enqueue_mail()
+{
+	# This is race-condition-safe, or not?
+	# Queue filename: Timestamp-Nanosecs-PID
+	queue_id="$(date +%s-%N)-$(printf %05d $$)"
+	queue_file="${cfg[QUEUE]}/$queue_id"
+
+	# We don't need a queue lock for new files, because we're not
+	# changing existing files. Theoretical it's not required to do
+	# the following check, because race-conditions are impossible.
+	[[ -f "$queue_file" ]] || ls "$queue_file",* &>/dev/null \
+	&& log -e 1 "Queue file already exists: ID $queue_id"
+
+	# Write escaped arguments and mail content to temporary queue file.
+	cat <<< "$(printf '%q\n' "$@" | tr '\n' ' ')" > "$queue_file" || log -e "$?" "Queue header write failed: ID $queue_id"
+	cat >> "$queue_file" || log -e "$?" "Queue content write failed: ID $queue_id"
+
+	# Move queue file to final destination with retry-counter value "0" appended.
+	mv "$queue_file" "$queue_file,0" || log -e "$?" "Queue file release failed: ID $queue_id"
+
+	# ...
+	log "Added message to queue: ID $queue_id"
+	unset queue_file
+}
+
+#LANG=C
+BASECMD=$(basename "$0")
+ec=0
+
+set -u -o pipefail
+unset queue_file
+unset locked
+umask 0077
+
+# Load user configuration.
+# Or fallback to defaults.
+read_config ~/.msmtpq.cfg
+
+# Remove queue locking
+# and delete $queue_file
+trap cleanup EXIT
+
+if [[ "${1:-}" == '--q-mgmt' ]]
+then
+	BASECMD=msmtp-queue
+	shift
+fi
+
+# msmtp-queue - queue management mode
+if [[ "$BASECMD" == "msmtp-queue" ]]
+then
+	log -d "Switching to queue management mode..."
+
+	OP=${1:-}
+	shift
+
+	declare -i ec=0
+	lock_queue
+
+	case "${OP:1}" in
+		f)    run_queue -f       ;; # flush queue
+		r)    run_queue          ;; # run the queue
+		R)    send_mails "$@"    ;; # send individual mail(s)
+		p)    purge_mails "$@"   ;; # purge individual mail(s)
+		a)    purge_queue        ;; # purge all mails in queue
+		d|'') display_queue      ;; # display queue (default)
+
+		h)
+			stderr "=========================================="
+			stderr "Yet Another Queue Implementation for MSMTP"
+			stderr "=========================================="
+			stderr
+			stderr "Usage: msmtpq [sendmail options]"
+			stderr
+			stderr "       msmtpq --q-mgmt <OP> [<ARGS> ...]"
+			stderr "        or msmtp-queue <OP> [<ARGS> ...]"
+			stderr
+			stderr "Sendmail mode:"
+			stderr
+			stderr "  Just send your mail content to STDIN."
+			stderr "  Your message will be added to the queue."
+			stderr "  Don't forget to setup a queue-run cronjob!"
+			stderr "  Otherwise it'll be held forever in queue."
+			stderr
+			stderr "Queue management options:"
+			stderr
+			stderr "  -f             flush mail queue (force delivery)"
+			stderr "  -r             run mail queue (honor wait times)"
+			stderr "  -R [<ID> ...]  send selected mail(s) from queue"
+			stderr "  -p [<ID> ...]  purge selected mail(s) from queue"
+			stderr "  -a             purge all mails from queue"
+			stderr "  -d             display queue list"
+			stderr "  -h             show help message"
+			stderr
+			stderr "#########################################"
+			stderr "## Configuration file: ~/.msmtpq.conf   #"
+			stderr "## Looks like Bash but it's plaintext!  #"
+			stderr "#########################################"
+			stderr "#"
+			stderr "## Path to msmtp binary"
+			stderr "#MSMTP=msmtp"
+			stderr "#"
+			stderr "## Path to queue directory. Relative to \$HOME path!"
+			stderr "##   mkdir -v ~/.msmtpq && chmod -c 0700 ~/.msmtpq"
+			stderr "#QUEUE=.msmtpq"
+			stderr "#"
+			stderr "## Path to logfile."
+			stderr "## Relative to \$HOME!"
+			stderr "## Disabled by default."
+			stderr "#LOGFILE="
+			stderr "#"
+			stderr "## Prefixed timestamp format for logfile."
+			stderr "#LOGFILE_TIME_FORMAT=%Y-%m-%d %H:%M:%S"
+			stderr "#"
+			stderr "## Log to syslog?"
+			stderr "## Facility mail.*"
+			stderr "#SYSLOG=off"
+			stderr "#"
+			stderr "## Output log messages to STDERR too?"
+			stderr "## Facility: mail.{debug,info,warn,err}"
+			stderr "#QUIET=off"
+			stderr "#"
+			stderr "## Enable all debug messages? (Only for development.)"
+			stderr "## Will be logged to file and syslog too if enabled!"
+			stderr "#DEBUG=off"
+			stderr "#"
+			stderr "## Wait time after failed delivery tries."
+			stderr "## Will be doubled after each failed retry!"
+			stderr "## State estimated per message, not globally."
+			stderr "## Always and only calculated by enqueue time."
+			stderr "## Time in seconds. Use \"0\" to disable it."
+			stderr "#DEFER=300"
+			stderr "#"
+			stderr "## Count message as undeliverable after <n> retries."
+			stderr "## The message will be deleted from queue and is lost."
+			stderr "## Use \"0\" to disable this feature. (Not recommended!)"
+			stderr "## Estimate your best value: \$((2 ** (<n> - 1) * DEFER))"
+			stderr "#UNDEV=12"
+			exit 1
+			;;
+
+		*)
+			err "unrecognized option '$OP'" \
+			    "Try '-h' for more information."
+			;;
+	esac
+
+	lock_queue -u
+else
+	enqueue_mail
+fi
+
+exit "$ec"
+
+# implement send limit per run?
+# ...
+
+# implement max retry time/counter?
+# ...
+
+# define each variable in functions as "local"!
+# ...
