@@ -132,7 +132,7 @@ function read_config
 	done <<< "$c"
 
 	[[ -z "${tmp[QUEUE]}" ]] \
-	&& log -e 1 "Empty QUEUE path in $(basename "$1")"
+	&& log -e 78 "Empty QUEUE path in $(basename "$1")"
 
 	# Queue directory: Absolute path or relative to $HOME
 	[[ -n "${tmp[QUEUE]}" && "${tmp[QUEUE]:0:1}" != "/" ]] \
@@ -140,7 +140,7 @@ function read_config
 	|| cfg[QUEUE]="${tmp[QUEUE]}" \
 
 	[[ ! -d "${cfg[QUEUE]}" || ! -w "${cfg[QUEUE]}" ]] \
-	&& log -e 1 "Invalid QUEUE path: ${cfg[QUEUE]}"
+	&& log -e 78 "Invalid QUEUE path: ${cfg[QUEUE]}"
 
 	# Logfile: Absolute path or relative to $HOME
 	[[ -n "${tmp[LOGFILE]}" && "${tmp[LOGFILE]:0:1}" != "/" ]] \
