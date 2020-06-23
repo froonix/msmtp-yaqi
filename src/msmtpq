@@ -279,7 +279,8 @@ send_mails()
 		get_header "$file"
 		get_content "$file"
 
-		if /bin/false "${cfg[MSMTP]}" $queue_header <<< "$queue_content"
+		# shellcheck disable=SC2086
+		if "${cfg[MSMTP]}" $queue_header <<< "$queue_content"
 		then
 			log "Queued message sent: ID $q"
 			purge_mails "$q"
@@ -368,9 +369,6 @@ display_queue()
 	local -i i=0
 	local -i current
 	local -i defer
-
-	# DEBUG
-	sleep 30
 
 	current=$(date +%s)
 	for file in "${cfg[QUEUE]}"/*-*-*,*
@@ -477,8 +475,9 @@ function lock_queue
 		# Locking with mkdir is a great and simple idea.
 		# Thanks for this implementation, Chris Gianniotis!
 		while [[ "${locked:-0}" -ne 1 && "$sec" -le "$max" ]]
-		do
-			log -d "Waiting for lock... ($sec/$max)"
+		do log -d "Waiting for lock... ($sec/$max seconds)"
+
+			# shellcheck disable=SC2015
 			mkdir "$lock" 2>/dev/null \
 			&& locked=1 \
 			|| sleep 1
@@ -558,12 +557,12 @@ then
 			echo '## Path to msmtp binary'
 			echo '#MSMTP=msmtp'
 			echo
-			echo '## Path to queue directory. Relative to $HOME path!'
+			echo '## Path to queue directory. Relative to $''HOME path!'
 			echo '##   mkdir -v ~/.msmtpq && chmod -c 0700 ~/.msmtpq'
 			echo '#QUEUE=.msmtpq'
 			echo
 			echo '## Path to logfile.'
-			echo '## Relative to $HOME!'
+			echo '## Relative to $''HOME!'
 			echo '## Disabled by default.'
 			echo '#LOGFILE='
 			echo
@@ -592,7 +591,7 @@ then
 			echo '## Count message as undeliverable after <n> retries.'
 			echo '## The message will be deleted from queue and is lost.'
 			echo '## Use "0" to disable this feature. (Not recommended!)'
-			echo '## Estimate your best value: $((2 ** (<n> - 1) * DEFER))'
+			echo '## Estimate your best value: $''((2 ** (<n> - 1) * DEFER))'
 			echo '#UNDEV=12'
 			echo
 			echo '## Maximum elements per run with -r.'
