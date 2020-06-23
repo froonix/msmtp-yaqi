@@ -1,7 +1,7 @@
 # msmtp-yaqi
 Yet Another Queue Implementation for [MSMTP](https://marlam.de/msmtp/)
 
-Please take a look at the [Wiki](https://github.com/froonix/msmtp-yaqi/wiki) for more informations.
+Please take a look at the [Wiki](https://github.com/froonix/msmtp-yaqi/wiki) for more details.
 
 ## Credits
 Inspired by:
