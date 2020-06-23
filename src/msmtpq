@@ -13,7 +13,7 @@
 #########################################################################
 
 # Alias for echo command.
-# Redirect all to STDERR.
+# Redirect it to STDERR.
 stderr()
 {
 	echo "$@" 1>&2
@@ -52,16 +52,23 @@ function log
 			;;
 	esac
 
+	# Hide debug messages without debug mode
 	[[ "$dbg" -eq 1 && "${cfg[DEBUG]}" -ne 1 ]] \
 	&& return
 
 	for msg in "$@"
 	do
+		# Output message to STDERR (if enabled)
 		[[ "${cfg[QUIET]}" -eq 0 ]] && stderr "$BASECMD: $msg"
+
+		# Send message to syslog (if enabled)
 		[[ "${cfg[SYSLOG]}" -eq 1 ]] && logger -t "${BASECMD}[$$]" -p "$facility" -- "$msg"
+
+		# Write message to logfile (if enabled)
 		[[ -n "${cfg[LOGFILE]}" ]] && echo "[$(date +"${cfg[LOGFILE_TIME_FORMAT]}")] $msg" >> "${cfg[LOGFILE]}"
 	done
 
+	# Error? Stop now!
 	[[ "$exit" -ne 0 ]] \
 	&& log -d "exit $exit" \
 	&& exit "$exit"
@@ -74,20 +81,27 @@ function read_config
 	declare -g -A cfg
 	local -A tmp
 
+	# DEFAULT CONFIG (INTERNAL FORMAT)
+	# See output of: msmtp-queue -h
 	cfg[MSMTP]=msmtp
 	cfg[QUEUE]=.msmtpq
-	cfg[LOGFILE]=  # filename or empty
+	cfg[LOGFILE]=
 	cfg[LOGFILE_TIME_FORMAT]="%Y-%m-%d %H:%M:%S"
-	cfg[SYSLOG]=0  # on|off
-	cfg[QUIET]=0   # on|off
-	cfg[DEBUG]=0   # on|off
+	cfg[SYSLOG]=0
+	cfg[QUIET]=0
+	cfg[DEBUG]=0
 	cfg[DEFER]=300
 	cfg[UNDEV]=12
 	cfg[LIMIT]=0
 
+	# Try to read config file
 	[[ ! -f "$1" ]] && return
+
+	# Strip comments from file
 	c=$(grep -Ev '^(#|$)' "$1")
 
+	# Copy default config array to user array
+	# to set default values for unset elements.
 	for k in "${!cfg[@]}"
 	do
 		tmp["$k"]="${cfg[$k]}"
@@ -95,6 +109,8 @@ function read_config
 
 	while IFS= read -r l
 	do
+		# This is really very primitive.
+		# But it does the job for now.
 		k=$(cut -d = -f 1 <<< "$l")
 		v=${l:$((${#k}+1))}
 		tmp[$k]="$v"
@@ -103,6 +119,7 @@ function read_config
 	[[ -z "${tmp[QUEUE]}" ]] \
 	&& log -e 1 "Empty QUEUE path in $(basename "$1")"
 
+	# Queue directory: Absolute path or relative to $HOME
 	[[ -n "${tmp[QUEUE]}" && "${tmp[QUEUE]:0:1}" != "/" ]] \
 	&& cfg[QUEUE]="$HOME/${tmp[QUEUE]}" \
 	|| cfg[QUEUE]="${tmp[QUEUE]}" \
@@ -110,18 +127,23 @@ function read_config
 	[[ ! -d "${cfg[QUEUE]}" || ! -w "${cfg[QUEUE]}" ]] \
 	&& log -e 1 "Invalid QUEUE path: ${cfg[QUEUE]}"
 
+	# Logfile: Absolute path or relative to $HOME
 	[[ -n "${tmp[LOGFILE]}" && "${tmp[LOGFILE]:0:1}" != "/" ]] \
 	&& cfg[LOGFILE]="$HOME/${tmp[LOGFILE]}" \
 	|| cfg[LOGFILE]="${tmp[LOGFILE]}"
 
+	# Convert on/off values to integers
+	# TODO: case-insensitive, true, yes, 1, ...
 	[[ "${tmp[SYSLOG]}" == "on" ]] && cfg[SYSLOG]=1 || cfg[SYSLOG]=0
 	[[ "${tmp[QUIET]}" == "on" ]] && cfg[QUIET]=1 || cfg[QUIET]=0
 	[[ "${tmp[DEBUG]}" == "on" ]] && cfg[DEBUG]=1 || cfg[DEBUG]=0
 
+	# Convert elements to integers
 	cfg[DEFER]=$(printf '%d' "${tmp[DEFER]}")
 	cfg[UNDEV]=$(printf '%d' "${tmp[UNDEV]}")
 	cfg[LIMIT]=$(printf '%d' "${tmp[LIMIT]}")
 
+	# Check for negative integers
 	[[ "${cfg[DEFER]}" -lt 0 ]] && cfg[DEFER]=0
 	[[ "${cfg[UNDEV]}" -lt 0 ]] && cfg[UNDEV]=0
 	[[ "${cfg[LIMIT]}" -lt 0 ]] && cfg[LIMIT]=0
