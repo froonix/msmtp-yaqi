@@ -58,6 +58,8 @@ function log
 	for msg in "$@"
 	do
 		[[ "${cfg[QUIET]}" -eq 0 ]] && stderr "$BASECMD: $msg"
+
+		# shellcheck disable=SC1087
 		[[ "${cfg[SYSLOG]}" -eq 1 ]] && logger -t "$BASECMD[$$]" -p "$facility" -- "$msg"
 		[[ -n "${cfg[LOGFILE]}" ]] && echo "[$(date +"${cfg[LOGFILE_TIME_FORMAT]}")] $msg" >> "${cfg[LOGFILE]}"
 	done
@@ -86,7 +88,7 @@ function read_config
 	cfg[LIMIT]=0
 
 	[[ ! -f "$1" ]] && return
-	c=$(egrep -v '^(#|$)' "$1")
+	c=$(grep -Ev '^(#|$)' "$1")
 
 	for k in "${!cfg[@]}"
 	do
@@ -212,31 +214,32 @@ function purge_queue
 
 function get_details
 {
+	local b
+	declare -g queue_id
+	declare -g -i queue_tries
+	declare -g -i queue_mtime
+
 	unset queue_id
 	unset queue_tries
 	unset queue_mtime
 
-	local b=$(basename "$1")
-
-	declare -g queue_id=$(cut -d , -f 1 <<< "$b")
-	declare -g -i queue_tries=$(cut -d , -f 2 <<< "$b")
-	declare -g -i queue_mtime=$(stat -c %Y "$1")
+	b=$(basename "$1")
+	queue_id=$(cut -d , -f 1 <<< "$b")
+	queue_tries=$(cut -d , -f 2 <<< "$b")
+	queue_mtime=$(stat -c %Y "$1")
 }
 
 function run_queue
 {
 	local -i c=0
 	local -i flush
-	local -i current=$(date +%s)
-	local -i modified
-	local -i tries
-	local basename
-	local id
+	local -i current
 
 	[[ "${1:-}" == "-f" ]] \
 	&& flush=1 || flush=0
 	shift
 
+	current=$(date +%s)
 	for file in "${cfg[QUEUE]}"/*-*-*,*
 	do
 		[[ ! -f "$file" ]] \
@@ -246,30 +249,24 @@ function run_queue
 
 		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "$queue_tries" -gt 0 && "$((current-queue_mtime))" -lt "$((2**(queue_tries-1)*cfg[DEFER]))" ]]
 		then
-			log -d "Deferring next delivery try: ID $queue_id (c=$current, m=$queue_mtime, t=$queue_tries)"
+			log -d "Deferring next delivery try: ID $queue_id (c=$current; m=$queue_mtime; t=$queue_tries)"
 			continue
 		fi
 
-		if [[ "$queue_tries" -gt 0 ]]
-		then
-			log -d "flush=$flush, defer=${cfg[DEFER]}, tries=$queue_tries, current=$current, modified=$queue_mtime, check: $((current-queue_mtime)) -lt $((2**(queue_tries-1)*cfg[DEFER]))"
-		fi
-		#continue;
-
-		send_mails "$queue_id"
 		((c++))
+		send_mails "$queue_id"
 
-		# implement UNDEV cfg!
+		# save exit code!
 		# ...
 
+		[[ "${cfg[UNDEV]}" -gt 0 && "$((queue_tries+1))" -ge "${cfg[UNDEV]}" ]] && purge_mails "$queue_id"
 		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "${cfg[LIMIT]}" -gt 0 && "$c" -ge "${cfg[LIMIT]}" ]]
 		then
 			log -d "Per-run limit reached, stopping now..."
 			break
 		fi
 
-		# save exit code!
-		# ...
+
 	done
 
 	# exit code
@@ -314,7 +311,7 @@ send_mails()
 		else
 			RC=$?
 			counter=$(cut -d , -f 2 <<< "$(basename "$file")")
-			log "Failed to send queued message: ID $q (try=$((counter+1)); status=$RC)"
+			log "Failed to send queued message: ID $q (try=$((counter+1))$([[ "${cfg[UNDEV]}" -gt 0 ]] && echo "/${cfg[UNDEV]}"); status=$RC)"
 			mv "$file" "${cfg[QUEUE]}/$q,$((counter+1))"
 		fi
 		return $RC
@@ -394,11 +391,10 @@ purge_mails()
 display_queue()
 {
 	local -i i=0
-	local -i current=$(date +%s)
+	local -i current
 	local -i defer
-	local basename
-	local id
 
+	current=$(date +%s)
 	for file in "${cfg[QUEUE]}"/*-*-*,*
 	do
 		[[ ! -f "$file" ]] \
@@ -426,15 +422,14 @@ display_queue()
 
 		if [[ "$queue_tries" -gt 0 && "${cfg[DEFER]}" -gt 0 ]]
 		then
-			modified=$(stat -c %Y "$file")
 			defer=$((2**(queue_tries-1)*cfg[DEFER]))
 
 			[[ "$((current-queue_mtime))" -lt "$defer" ]] \
-			&& printf "   Deferred: %s\n" "$(date -d @"$((queue_mtime+defer))" +'%Y-%m-%d %H:%M:%S %z')"
+			&& printf '   Deferred: %s\n' "$(date -d @"$((queue_mtime+defer))" +'%Y-%m-%d %H:%M:%S %z')"
 		fi
 
-		'egrep' -s -h -i '^(Subject|From|To|CC|BCC):' <<< "$queue_content" | sort -i | sed 's/^/   /'
-		printf "   -- %dB (%dkB)\n" "$(wc -c <<< "$queue_content")" "$(du -k "$file" | cut -f 1)"
+		grep -Eshi '^(Subject|From|To|CC|BCC):' <<< "$queue_content" | sort -i | sed 's/^/   /'
+		printf '   -- %dB (%dkB)\n' "$(wc -c <<< "$queue_content")" "$(du -k "$file" | cut -f 1)"
 	done
 
 	[[ "$i" -eq 0 ]] \
@@ -459,7 +454,7 @@ get_content()
 
 # Insert mail from STDIN into queue.
 # Queue locking not required here!
-enqueue_mail()
+function enqueue_mail
 {
 	# This is race-condition-safe, or not?
 	# Queue filename: Timestamp-Nanosecs-PID
@@ -613,7 +608,7 @@ then
 
 	lock_queue -u
 else
-	enqueue_mail
+	enqueue_mail "$@"
 fi
 
 exit "$ec"
