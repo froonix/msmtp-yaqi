@@ -178,44 +178,6 @@ function read_config
 	log -d "--------------------------------------------------"
 }
 
-# Lock queue directory.
-# Use -u to unlock it!
-function lock_queue
-{
-	local lock="${cfg[QUEUE]}/.lock"
-	local -i max=30 sec=0
-	declare -g -i locked
-
-	if [[ -z "${1:-}" ]]
-	then
-		# Locking with mkdir is a great and simple idea.
-		# Thanks for this implementation, Chris Gianniotis!
-		while [[ "${locked:-0}" -ne 1 && "$sec" -le "$max" ]]
-		do
-			log -d "Waiting for lock... ($sec/$max)"
-			mkdir "$lock" 2>/dev/null \
-			&& locked=1 \
-			|| sleep 1
-			((sec++))
-		done
-
-		[[ "${locked:-0}" -ne 1 ]] && \
-			error "Could not get exclusive lock on queue! Waited for $max seconds." \
-			      "Please remove queue directory if no other instance is running:" \
-			      "" \
-			      "  rmdir $(printf %q "$lock")" \
-			      "" \
-			      "Giving up now."
-
-		log -d "We got it! Let's rumble."
-
-	elif [[ "$1" == '-u' && "${locked:-0}" -eq 1 ]]
-	then
-		#log -d "Removing lockfile: $lock"
-		rmdir "$lock"; locked=0
-	fi
-}
-
 function purge_queue
 {
 	for file in "${cfg[QUEUE]}"/*-*-*,*
@@ -457,6 +419,7 @@ display_queue()
 # Get msmtp argument list from queue file.
 get_header()
 {
+	declare -g queue_header
 	queue_header=$(head -n 1 "$1" 2>/dev/null)
 	[[ -z "$queue_header" ]] && log -e "$?" "Could not read header from queue file $1"
 }
@@ -464,6 +427,7 @@ get_header()
 # Get real mail content from queue file.
 get_content()
 {
+	declare -g queue_content
 	queue_content=$(tail -n +2 "$1" 2>/dev/null)
 	[[ -z "$queue_content" ]] && log -e "$?" "Could not read content from queue file $1"
 }
@@ -472,6 +436,12 @@ get_content()
 # Queue locking not required here!
 function enqueue_mail
 {
+	# $queue_file will be handled by cleanup()!
+	# DO NOT USE THIS VARIABLE FOR OTHER THINGS.
+	# The mentioned file will be deleted.
+	declare -g queue_file
+	local queue_id
+
 	# This is race-condition-safe, or not?
 	# Queue filename: Timestamp-Nanosecs-PID
 	queue_id="$(date +%s-%N)-$(printf %05d $$)"
@@ -479,7 +449,8 @@ function enqueue_mail
 
 	# We don't need a queue lock for new files, because we're not
 	# changing existing files. Theoretical it's not required to do
-	# the following check, because race-conditions are impossible.
+	# the following check, because race-conditions are impossible,
+	# as long there's only one host writing to this queue directory.
 	[[ -f "$queue_file" ]] || ls "$queue_file",* &>/dev/null \
 	&& log -e 1 "Queue file already exists: ID $queue_id"
 
@@ -489,15 +460,54 @@ function enqueue_mail
 
 	# Move queue file to final destination with retry-counter value "0" appended.
 	mv "$queue_file" "$queue_file,0" || log -e "$?" "Queue file release failed: ID $queue_id"
-
-	# ...
 	log "Added message to queue: ID $queue_id"
 	unset queue_file
+}
+
+# Lock queue directory.
+# Use -u to unlock it!
+function lock_queue
+{
+	local lock="${cfg[QUEUE]}/.lock"
+	local -i max=30 sec=0
+	declare -g -i locked
+
+	if [[ -z "${1:-}" ]]
+	then
+		# Locking with mkdir is a great and simple idea.
+		# Thanks for this implementation, Chris Gianniotis!
+		while [[ "${locked:-0}" -ne 1 && "$sec" -le "$max" ]]
+		do
+			log -d "Waiting for lock... ($sec/$max)"
+			mkdir "$lock" 2>/dev/null \
+			&& locked=1 \
+			|| sleep 1
+			((sec++))
+		done
+
+		[[ "${locked:-0}" -ne 1 ]] && \
+			error "Could not get exclusive lock on queue! Waited for $max seconds." \
+			      "Please remove queue directory if no other instance is running:" \
+			      "" \
+			      "  rmdir $(printf %q "$lock")" \
+			      "" \
+			      "Giving up now."
+
+		log -d "We got it! Let's rumble."
+
+	elif [[ "$1" == '-u' && "${locked:-0}" -eq 1 ]]
+	then
+		#log -d "Removing lockfile: $lock"
+		rmdir "$lock"; locked=0
+	fi
 }
 
 # Trap callback.
 function cleanup
 {
+	declare -g locked
+	declare -g queue_file
+
 	[[ -n "${queue_file:-}" ]] \
 	&& log -d "Removing stale queue file: $queue_file" \
 	&& rm -f "$queue_file" && unset queue_file
@@ -648,4 +658,7 @@ fi
 exit "$ec"
 
 # define each variable in functions as "local"!
+# ...
+
+# add debian package for buster
 # ...
