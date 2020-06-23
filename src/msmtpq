@@ -187,40 +187,22 @@ function purge_queue
 	done
 }
 
-function get_details
-{
-	local b
-	declare -g queue_id
-	declare -g -i queue_tries
-	declare -g -i queue_mtime
-
-	unset queue_id
-	unset queue_tries
-	unset queue_mtime
-
-	b=$(basename "$1")
-	queue_id=$(cut -d , -f 1 <<< "$b")
-	queue_tries=$(cut -d , -f 2 <<< "$b")
-	queue_mtime=$(stat -c %Y "$1")
-}
-
 function run_queue
 {
 	local -i c=0
-	local -i flush
+	local -i flush=0
 	local -i current
+	local -i state=0
+	local file
 
 	[[ "${1:-}" == "-f" ]] \
-	&& flush=1 || flush=0
-	shift
+	&& flush=1; shift
 
 	current=$(date +%s)
 	for file in "${cfg[QUEUE]}"/*-*-*,*
 	do
-		[[ ! -f "$file" ]] \
-		&& continue
-
-		get_details "$file"
+		[[ ! -f "$file" ]] && continue
+		get_details "$file" -; ((c++))
 
 		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "$queue_tries" -gt 0 && "$((current-queue_mtime))" -lt "$((2**(queue_tries-1)*cfg[DEFER]))" ]]
 		then
@@ -228,11 +210,8 @@ function run_queue
 			continue
 		fi
 
-		((c++))
-		send_mails "$queue_id"
-
-		# save exit code!
-		# ...
+		send_mails "$queue_id" \
+		|| state=$?
 
 		[[ "${cfg[UNDEV]}" -gt 0 && "$((queue_tries+1))" -ge "${cfg[UNDEV]}" ]] && purge_mails "$queue_id"
 		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "${cfg[LIMIT]}" -gt 0 && "$c" -ge "${cfg[LIMIT]}" ]]
@@ -240,18 +219,17 @@ function run_queue
 			log -d "Per-run limit reached, stopping now..."
 			break
 		fi
-
-
 	done
 
-	# exit code
-	# ...
+	return "$state"
 }
 
-## send a queued mail out via msmtp
-##
+# send_mails <ID> ...
 send_mails()
 {
+	local q f file
+	local -i state=0
+
 	for q in "$@"
 	do
 		q=$(basename "$q")
@@ -268,11 +246,8 @@ send_mails()
 
 		if [[ -z "$file" ]]
 		then
-			# exit code?
-			# ...
-
 			stderr "Queue ID $q not found."
-
+			state=66 # EX_NOINPUT
 			continue
 		fi
 
@@ -280,26 +255,31 @@ send_mails()
 		get_content "$file"
 
 		# shellcheck disable=SC2086
-		if "${cfg[MSMTP]}" $queue_header <<< "$queue_content"
+		"${cfg[MSMTP]}" $queue_header \
+		<<< "$queue_content" \
+		|| state=$?
+
+		if [[ "$state" -ne 0 ]]
 		then
-			log "Queued message sent: ID $q"
-			purge_mails "$q"
-		else
-			RC=$?
-			counter=$(cut -d , -f 2 <<< "$(basename "$file")")
-			log "Failed to send queued message: ID $q (try=$((counter+1))$([[ "${cfg[UNDEV]}" -gt 0 ]] && echo "/${cfg[UNDEV]}"); status=$RC)"
-			mv "$file" "${cfg[QUEUE]}/$q,$((counter+1))"
+			# Increment try-counter in filename by renaming the queue file.
+			counter=$(cut -d , -f 2 <<< "$(basename "$file")"); mv "$file" "${cfg[QUEUE]}/$q,$((counter+1))"
+			log "Failed to send queued message: ID $q (try=$((counter+1))$([[ "${cfg[UNDEV]}" -gt 0 ]] && echo "/${cfg[UNDEV]}"); status=$state)"
+			continue
 		fi
-		return $RC
+
+		log "Queued message sent: ID $q"
+		purge_mails "$q"
 	done
 
-	# exit code?
-	# ...
+	return "$state"
 }
 
-# ...
+# purge_mails <ID> ...
 purge_mails()
 {
+	local q f file
+	local -i state=0
+
 	for q in "$@"
 	do
 		q=$(basename "$q")
@@ -316,11 +296,8 @@ purge_mails()
 
 		if [[ -z "$file" ]]
 		then
-			# exit code?
-			# ...
-
 			stderr "Queue ID $q not found."
-
+			state=66 # EX_NOINPUT
 			continue
 		fi
 
@@ -328,40 +305,8 @@ purge_mails()
 		log "Removed message from queue: ID $q"
 	done
 
-	# exit code
-	# ...
+	return "$state"
 }
-
-## get_queue [<ID> ...]
-#function get_queue
-#{
-#	local w
-#	unset queue_files
-#	declare -g -a queue_files
-#
-#	[[ "$#" -gt 0 ]] \
-#	&& w='*' \
-#	|| w=
-#
-#		for f in "${cfg[QUEUE]}/$q"$w,*
-#		do
-#			if [[ -f "$f" ]]
-#			then
-#				file=$f
-#				break;
-#			fi
-#		done
-#
-#		if [[ -z "$file" ]]
-#		then
-#			# exit code?
-#			# ...
-#
-#			stderr "Queue ID $q not found."
-#
-#			continue
-#		fi
-#}
 
 # Display queue contents.
 display_queue()
@@ -373,12 +318,10 @@ display_queue()
 	current=$(date +%s)
 	for file in "${cfg[QUEUE]}"/*-*-*,*
 	do
-		[[ ! -f "$file" ]] \
-		&& continue
-
-		((i++))
-		get_details "$file"
+		[[ ! -f "$file" ]] && continue
+		get_details "$file" -
 		get_content "$file"
+		((i++))
 
 		echo
 		echo -n " Message #$i in queue"
@@ -412,6 +355,27 @@ display_queue()
 	&& error 'No mail in queue'
 
 	echo
+}
+
+# Extract details from queue filename.
+# Set 2nd param to get filemtime too.
+function get_details
+{
+	local b
+	declare -g queue_id
+	declare -g -i queue_tries=0
+	declare -g -i queue_mtime=0
+
+	unset queue_id
+	unset queue_tries
+	unset queue_mtime
+
+	b=$(basename "$1")
+	queue_id=$(cut -d , -f 1 <<< "$b")
+	queue_tries=$(cut -d , -f 2 <<< "$b")
+
+	[[ -n "${2:-}" ]] && \
+	queue_mtime=$(stat -c %Y "$1")
 }
 
 # Get msmtp argument list from queue file.
@@ -515,11 +479,10 @@ function cleanup
 	&& lock_queue -u 2>/dev/null
 }
 
-#LANG=C
-BASECMD=$(basename "$0")
-ec=0
-
+export LANG=C
+declare -i ec=0
 set -u -o pipefail
+BASECMD=$(basename "$0")
 unset queue_file
 unset locked
 umask 0077
@@ -637,27 +600,24 @@ then
 
 	log -d "Switching to queue management mode..."
 
-	declare -i ec=0
 	lock_queue
+	case "${OP:1}"
+	in
 
-	case "${OP:1}" in
-		f)    run_queue -f       ;; # flush queue
-		r)    run_queue          ;; # run the queue
-		R)    send_mails "$@"    ;; # send individual mail(s)
-		p)    purge_mails "$@"   ;; # purge individual mail(s)
-		a)    purge_queue        ;; # purge all mails in queue
-		d|'') display_queue      ;; # display queue (default)
+		f) run_queue -f    ; ec=$? ;; # flush queue
+		r) run_queue       ; ec=$? ;; # run the queue
+		R) send_mails "$@" ; ec=$? ;; # send individual mail(s)
+		p) purge_mails "$@"; ec=$? ;; # purge individual mail(s)
+		a) purge_queue     ; ec=$? ;; # purge all mails in queue
+		*) display_queue   ; ec=$? ;; # display queue (default)
+
 	esac
-
 	lock_queue -u
 else
 	enqueue_mail "$@"
 fi
 
 exit "$ec"
-
-# define each variable in functions as "local"!
-# ...
 
 # add debian package for buster
 # ...
