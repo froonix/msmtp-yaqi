@@ -58,9 +58,7 @@ function log
 	for msg in "$@"
 	do
 		[[ "${cfg[QUIET]}" -eq 0 ]] && stderr "$BASECMD: $msg"
-
-		# shellcheck disable=SC1087
-		[[ "${cfg[SYSLOG]}" -eq 1 ]] && logger -t "$BASECMD[$$]" -p "$facility" -- "$msg"
+		[[ "${cfg[SYSLOG]}" -eq 1 ]] && logger -t "${BASECMD}[$$]" -p "$facility" -- "$msg"
 		[[ -n "${cfg[LOGFILE]}" ]] && echo "[$(date +"${cfg[LOGFILE_TIME_FORMAT]}")] $msg" >> "${cfg[LOGFILE]}"
 	done
 
