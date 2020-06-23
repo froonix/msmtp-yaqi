@@ -618,9 +618,3 @@ else
 fi
 
 exit "$ec"
-
-# hold modus, um einzelne mails in der queue zu belassen?
-# ...
-
-# add debian package for buster
-# ...
