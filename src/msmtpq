@@ -178,46 +178,41 @@ function read_config
 	log -d "--------------------------------------------------"
 }
 
-# Trap callback.
-function cleanup
-{
-	[[ -n "${queue_file:-}" ]] \
-	&& log -d "Removing stale queue file: $queue_file" \
-	&& rm -f "$queue_file" && unset queue_file
-
-	[[ -n "${locked:-}" ]] \
-	&& lock_queue -u 2>/dev/null
-}
-
 # Lock queue directory.
 # Use -u to unlock it!
-lock_queue()
+function lock_queue
 {
-	local LOK="${cfg[QUEUE]}/.lock"
-	local -i MAX=240 SEC=0
+	local lock="${cfg[QUEUE]}/.lock"
+	local -i max=30 sec=0
+	declare -g -i locked
 
 	if [[ -z "${1:-}" ]]
 	then
-		mkdir "$LOK" 2>/dev/null && locked=t
-
-		while [ -z "$locked" ] && (( SEC < MAX ))
+		# Locking with mkdir is a great and simple idea.
+		# Thanks for this implementation, Chris Gianniotis!
+		while [[ "${locked:-0}" -ne 1 && "$sec" -le "$max" ]]
 		do
-			sleep 1
-			(( ++SEC ))
-			mkdir "$LOK" 2>/dev/null && locked=t
+			log -d "Waiting for lock... ($sec/$max)"
+			mkdir "$lock" 2>/dev/null \
+			&& locked=1 \
+			|| sleep 1
+			((sec++))
 		done
 
-		[ -z "$locked" ] && \
-			error '' "cannot use queue ${cfg[QUEUE]} : waited $MAX seconds for"\
-				     "  lockdir [ $LOK ] to vanish ; giving up"\
-				     'if you are certain that no other instance of this script'\
-				     "  is running, then 'rmdir' the lock dir manually" '' # lock file still there, give up
+		[[ "${locked:-0}" -ne 1 ]] && \
+			error "Could not get exclusive lock on queue! Waited for $max seconds." \
+			      "Please remove queue directory if no other instance is running:" \
+			      "" \
+			      "  rmdir $(printf %q "$lock")" \
+			      "" \
+			      "Giving up now."
 
-	elif [[ "$1" == '-u' ]]
+		log -d "We got it! Let's rumble."
+
+	elif [[ "$1" == '-u' && "${locked:-0}" -eq 1 ]]
 	then
-		log -d "Removing lockfile: $LOK"
-		rmdir "$LOK"
-		unset locked
+		#log -d "Removing lockfile: $lock"
+		rmdir "$lock"; locked=0
 	fi
 }
 
@@ -412,6 +407,9 @@ display_queue()
 	local -i current
 	local -i defer
 
+	# DEBUG
+	sleep 30
+
 	current=$(date +%s)
 	for file in "${cfg[QUEUE]}"/*-*-*,*
 	do
@@ -497,6 +495,17 @@ function enqueue_mail
 	unset queue_file
 }
 
+# Trap callback.
+function cleanup
+{
+	[[ -n "${queue_file:-}" ]] \
+	&& log -d "Removing stale queue file: $queue_file" \
+	&& rm -f "$queue_file" && unset queue_file
+
+	[[ "${locked:-0}" -eq 1 ]] \
+	&& lock_queue -u 2>/dev/null
+}
+
 #LANG=C
 BASECMD=$(basename "$0")
 ec=0
@@ -523,21 +532,12 @@ fi
 # msmtp-queue - queue management mode
 if [[ "$BASECMD" == "msmtp-queue" ]]
 then
-	log -d "Switching to queue management mode..."
-
 	OP=${1:-}
 	shift
 
-	declare -i ec=0
-	lock_queue
-
 	case "${OP:1}" in
-		f)    run_queue -f       ;; # flush queue
-		r)    run_queue          ;; # run the queue
-		R)    send_mails "$@"    ;; # send individual mail(s)
-		p)    purge_mails "$@"   ;; # purge individual mail(s)
-		a)    purge_queue        ;; # purge all mails in queue
-		d|'') display_queue      ;; # display queue (default)
+		f|r|R|p|a|d|'')
+			;;
 
 		e)
 			echo '############################################################'
@@ -589,6 +589,7 @@ then
 			echo '## Works only, when DEFER is enabled.'
 			echo '## This feature is disabled by default.'
 			echo '#LIMIT=0'
+			exit 0
 			;;
 
 		h)
@@ -616,12 +617,27 @@ then
 			stderr "  -d             display mails in queue"
 			stderr "  -e             show example config"
 			stderr "  -h             show help message"
+			exit 0
 			;;
 
 		*)
 			error "unrecognized option '$OP'" \
 			      "Try '-h' for more information."
 			;;
+	esac
+
+	log -d "Switching to queue management mode..."
+
+	declare -i ec=0
+	lock_queue
+
+	case "${OP:1}" in
+		f)    run_queue -f       ;; # flush queue
+		r)    run_queue          ;; # run the queue
+		R)    send_mails "$@"    ;; # send individual mail(s)
+		p)    purge_mails "$@"   ;; # purge individual mail(s)
+		a)    purge_queue        ;; # purge all mails in queue
+		d|'') display_queue      ;; # display queue (default)
 	esac
 
 	lock_queue -u
