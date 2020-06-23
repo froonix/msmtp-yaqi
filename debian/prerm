@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+case "${1}" in
+	failed-upgrade)
+		;;
+
+	remove|upgrade|deconfigure)
+		update-alternatives --remove msmtpq /usr/bin/msmtp-yaqi
+		update-alternatives --remove msmtp-queue /usr/bin/msmtp-yaqi
+		;;
+
+	*)
+		exit 1
+		;;
+esac
+
+exit 0

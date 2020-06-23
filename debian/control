@@ -1,0 +1,13 @@
+Source: msmtp-yaqi
+Section: mail
+Priority: optional
+Maintainer: Christian Schrötter <cs@fnx.li>
+Build-Depends-Indep: debhelper (>= 9)
+Standards-Version: 3.9.5
+Homepage: https://github.com/froonix/msmtp-yaqi
+
+Package: msmtp-yaqi
+Architecture: all
+Multi-Arch: foreign
+Depends: ${misc:Depends}, ${shlibs:Depends}, msmtp
+Description: Yet Another Queue Implementation for MSMTP
