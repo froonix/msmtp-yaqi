@@ -431,7 +431,7 @@ function enqueue_mail
 function lock_queue
 {
 	local lock="${cfg[QUEUE]}/.lock"
-	local -i max=30 sec=0
+	local -i max=60 sec=0
 	declare -g -i locked
 
 	if [[ -z "${1:-}" ]]
@@ -605,7 +605,7 @@ then
 	in
 
 		f) run_queue -f    ; ec=$? ;; # flush queue
-		r) run_queue       ; ec=$? ;; # run the queue
+		r) run_queue       ; ec=$? ;; # run the queue (cron)
 		R) send_mails "$@" ; ec=$? ;; # send individual mail(s)
 		p) purge_mails "$@"; ec=$? ;; # purge individual mail(s)
 		a) purge_queue     ; ec=$? ;; # purge all mails in queue
@@ -618,6 +618,9 @@ else
 fi
 
 exit "$ec"
+
+# hold modus, um einzelne mails in der queue zu belassen?
+# ...
 
 # add debian package for buster
 # ...
