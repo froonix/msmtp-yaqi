@@ -1,5 +1,5 @@
 Source: msmtp-yaqi
-Section: mail
+Section: fnx/wrapper
 Priority: optional
 Maintainer: Christian Schrötter <cs@fnx.li>
 Build-Depends-Indep: debhelper (>= 9)
