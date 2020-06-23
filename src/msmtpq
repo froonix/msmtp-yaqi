@@ -83,6 +83,7 @@ function read_config
 	cfg[DEBUG]=0   # on|off
 	cfg[DEFER]=300
 	cfg[UNDEV]=12
+	cfg[LIMIT]=0
 
 	[[ ! -f "$1" ]] && return
 	c=$(egrep -v '^(#|$)' "$1")
@@ -106,8 +107,8 @@ function read_config
 	&& cfg[QUEUE]="$HOME/${tmp[QUEUE]}" \
 	|| cfg[QUEUE]="${tmp[QUEUE]}" \
 
-	[[ ! -d "${tmp[QUEUE]}" || ! -w "${tmp[QUEUE]}" ]] \
-	&& log -e 1 "Invalid QUEUE path: ${tmp[QUEUE]}"
+	[[ ! -d "${cfg[QUEUE]}" || ! -w "${cfg[QUEUE]}" ]] \
+	&& log -e 1 "Invalid QUEUE path: ${cfg[QUEUE]}"
 
 	[[ -n "${tmp[LOGFILE]}" && "${tmp[LOGFILE]:0:1}" != "/" ]] \
 	&& cfg[LOGFILE]="$HOME/${tmp[LOGFILE]}" \
@@ -118,10 +119,12 @@ function read_config
 	[[ "${tmp[DEBUG]}" == "on" ]] && cfg[DEBUG]=1 || cfg[DEBUG]=0
 
 	cfg[DEFER]=$(printf '%d' "${tmp[DEFER]}")
-	[[ "${cfg[DEFER]}" -lt 0 ]] && cfg[DEFER]=0
-
 	cfg[UNDEV]=$(printf '%d' "${tmp[UNDEV]}")
+	cfg[LIMIT]=$(printf '%d' "${tmp[LIMIT]}")
+
+	[[ "${cfg[DEFER]}" -lt 0 ]] && cfg[DEFER]=0
 	[[ "${cfg[UNDEV]}" -lt 0 ]] && cfg[UNDEV]=0
+	[[ "${cfg[LIMIT]}" -lt 0 ]] && cfg[LIMIT]=0
 
 	log -d "Read configuration from file $1"
 	log -d "--------------------------------------------------"
@@ -134,6 +137,7 @@ function read_config
 	log -d "  \$cfg[DEBUG]=${cfg[DEBUG]}"
 	log -d "  \$cfg[DEFER]=${cfg[DEFER]}"
 	log -d "  \$cfg[UNDEV]=${cfg[UNDEV]}"
+	log -d "  \$cfg[LIMIT]=${cfg[LIMIT]}"
 	log -d "--------------------------------------------------"
 }
 
@@ -206,30 +210,63 @@ function purge_queue
 	done
 }
 
+function get_details
+{
+	unset queue_id
+	unset queue_tries
+	unset queue_mtime
+
+	local b=$(basename "$1")
+
+	declare -g queue_id=$(cut -d , -f 1 <<< "$b")
+	declare -g -i queue_tries=$(cut -d , -f 2 <<< "$b")
+	declare -g -i queue_mtime=$(stat -c %Y "$1")
+}
+
 function run_queue
 {
+	local -i c=0
+	local -i flush
+	local -i current=$(date +%s)
+	local -i modified
+	local -i tries
+	local basename
+	local id
+
 	[[ "${1:-}" == "-f" ]] \
 	&& flush=1 || flush=0
 	shift
 
-	local f t m c=$(date +%s)
 	for file in "${cfg[QUEUE]}"/*-*-*,*
 	do
 		[[ ! -f "$file" ]] \
 		&& continue
 
-		b=$(basename "$file")
-		f=$(cut -d , -f 1 <<< "$b")
-		t=$(cut -d , -f 2 <<< "$b")
-		m=$(stat -c %Y "$file")
+		get_details "$file"
 
-		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "$t" -gt 0 && "$((c-m))" -lt "$((2**(t-1)*cfg[DEFER]))" ]]
+		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "$queue_tries" -gt 0 && "$((current-queue_mtime))" -lt "$((2**(queue_tries-1)*cfg[DEFER]))" ]]
 		then
-			log -d "Deferring next delivery try: ID $f (c=$c, m=$m, t=$t)"
+			log -d "Deferring next delivery try: ID $queue_id (c=$current, m=$queue_mtime, t=$queue_tries)"
 			continue
 		fi
 
-		send_mails "$f"
+		if [[ "$queue_tries" -gt 0 ]]
+		then
+			log -d "flush=$flush, defer=${cfg[DEFER]}, tries=$queue_tries, current=$current, modified=$queue_mtime, check: $((current-queue_mtime)) -lt $((2**(queue_tries-1)*cfg[DEFER]))"
+		fi
+		#continue;
+
+		send_mails "$queue_id"
+		((c++))
+
+		# implement UNDEV cfg!
+		# ...
+
+		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "${cfg[LIMIT]}" -gt 0 && "$c" -ge "${cfg[LIMIT]}" ]]
+		then
+			log -d "Per-run limit reached, stopping now..."
+			break
+		fi
 
 		# save exit code!
 		# ...
@@ -357,9 +394,7 @@ purge_mails()
 display_queue()
 {
 	local -i i=0
-	local -i tries=0
 	local -i current=$(date +%s)
-	local -i modified
 	local -i defer
 	local basename
 	local id
@@ -369,28 +404,33 @@ display_queue()
 		[[ ! -f "$file" ]] \
 		&& continue
 
-		basename=$(basename "$file")
-		id=$(cut -d , -f 1 <<< "$basename")
-		tries=$(cut -d , -f 2 <<< "$basename")
-
-		echo
 		((i++))
-		((tries++))
+		get_details "$file"
 		get_content "$file"
 
-		echo -n "Message #$i in queue"
-		[[ "$tries" -gt 1 ]] && echo " (try $tries)" || echo
-		echo "ID $id"
+		echo
+		echo -n " Message #$i in queue"
 
+		if [[ "$((queue_tries))" -gt 0 || "${cfg[UNDEV]}" -eq 1 ]]
+		then
+			echo -n " (try $((queue_tries+1))"
+			[[ "${cfg[UNDEV]}" -gt 0 ]] \
+			&& echo -n "/${cfg[UNDEV]}"
+			echo ")"
+		else
+			echo
+		fi
+
+		echo "   ID: $queue_id"
 		echo -n "   Date: "; date -d "@$(stat -c %Y "$file")" +'%Y-%m-%d %H:%M:%S %z'
 
-		if [[ "$tries" -gt 1 && "${cfg[DEFER]}" -gt 0 ]]
+		if [[ "$queue_tries" -gt 0 && "${cfg[DEFER]}" -gt 0 ]]
 		then
 			modified=$(stat -c %Y "$file")
-			defer=$((2**(tries-2)*cfg[DEFER]))
+			defer=$((2**(queue_tries-1)*cfg[DEFER]))
 
-			[[ "$((current-modified))" -lt "$defer" ]] \
-			&& printf "   Deferred: %s\n" "$(date -d @"$((modified+defer))" +'%Y-%m-%d %H:%M:%S %z')"
+			[[ "$((current-queue_mtime))" -lt "$defer" ]] \
+			&& printf "   Deferred: %s\n" "$(date -d @"$((queue_mtime+defer))" +'%Y-%m-%d %H:%M:%S %z')"
 		fi
 
 		'egrep' -s -h -i '^(Subject|From|To|CC|BCC):' <<< "$queue_content" | sort -i | sed 's/^/   /'
@@ -557,6 +597,11 @@ then
 			stderr "## Use \"0\" to disable this feature. (Not recommended!)"
 			stderr "## Estimate your best value: \$((2 ** (<n> - 1) * DEFER))"
 			stderr "#UNDEV=12"
+			stderr "#"
+			stderr "## Maximum elements per run with -r."
+			stderr "## Works only, when DEFER is enabled."
+			stderr "## This feature is disabled by default."
+			stderr "#LIMIT=0"
 			exit 1
 			;;
 
@@ -572,12 +617,6 @@ else
 fi
 
 exit "$ec"
-
-# implement send limit per run?
-# ...
-
-# implement max retry time/counter?
-# ...
 
 # define each variable in functions as "local"!
 # ...
