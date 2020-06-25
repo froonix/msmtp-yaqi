@@ -3,6 +3,8 @@
 #                                                                       #
 # msmtp-yaqi: Yet Another Queue Implementation for MSMTP                #
 # --------------------------------------------------------------------- #
+# Version 0.0.0 by Christian Schrötter <cs@fnx.li>                      #
+#                                                                       #
 # Inspired by msmtpq (Chris Gianniotis) and msmtpqueue (Martin Lambers) #
 #                                                                       #
 # This program is free software: you can redistribute it and/or modify  #
@@ -97,7 +99,7 @@ function read_config
 	local -A tmp
 
 	# DEFAULT CONFIG (INTERNAL FORMAT)
-	# See output of: msmtp-queue -h
+	# See output of: msmtp-queue -e
 	cfg[MSMTP]=msmtp
 	cfg[QUEUE]=.msmtpq
 	cfg[LOGFILE]=
