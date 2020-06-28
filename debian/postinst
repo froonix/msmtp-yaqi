@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+case "${1}" in
+	abort-upgrade|abort-remove|abort-deconfigure)
+		;;
+
+	configure)
+		update-alternatives --install /usr/bin/msmtpq      msmtpq      /usr/bin/msmtp-yaqi 100
+		update-alternatives --install /usr/bin/msmtp-queue msmtp-queue /usr/bin/msmtp-yaqi 100
+		;;
+
+	*)
+		exit 1
+		;;
+esac
+
+exit 0
