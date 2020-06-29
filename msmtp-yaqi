@@ -3,7 +3,7 @@
 #                                                                       #
 # msmtp-yaqi: Yet Another Queue Implementation for MSMTP                #
 # --------------------------------------------------------------------- #
-# Version 0.0.0 by Christian Schrötter <cs@fnx.li>                      #
+# Version 0.0.1-dev by Christian Schrötter <cs@fnx.li>                  #
 #                                                                       #
 # Inspired by msmtpq (Chris Gianniotis) and msmtpqueue (Martin Lambers) #
 #                                                                       #
@@ -86,9 +86,11 @@ function log
 	done
 
 	# Error? Stop now!
-	[[ "$exit" -ne 0 ]] \
-	&& log -d "exit $exit" \
-	&& exit "$exit"
+	if [[ "$exit" -ne 0 ]]
+	then
+		log -d "exit $exit"
+		exit "$exit"
+	fi
 }
 
 # read_config <FILE>
@@ -98,24 +100,18 @@ function read_config
 	declare -g -A cfg
 	local -A tmp
 
-	# DEFAULT CONFIG (INTERNAL FORMAT)
-	# See output of: msmtp-queue -e
+	# DEFAULT CONFIG
+	# msmtp-queue -e
 	cfg[MSMTP]=msmtp
 	cfg[QUEUE]=.msmtpq
 	cfg[LOGFILE]=
 	cfg[LOGFILE_TIME_FORMAT]="%Y-%m-%d %H:%M:%S"
-	cfg[SYSLOG]=0
-	cfg[QUIET]=0
-	cfg[DEBUG]=0
+	cfg[SYSLOG]=off
+	cfg[QUIET]=off
+	cfg[DEBUG]=off
 	cfg[DEFER]=300
 	cfg[UNDEV]=12
 	cfg[LIMIT]=0
-
-	# Try to read config file
-	[[ ! -f "$1" ]] && return
-
-	# Strip comments from file
-	c=$(grep -Ev '^(#|$)' "$1")
 
 	# Copy default config array to user array
 	# to set default values for unset elements.
@@ -124,14 +120,26 @@ function read_config
 		tmp["$k"]="${cfg[$k]}"
 	done
 
-	while IFS= read -r l
-	do
-		# This is really very primitive.
-		# But it does the job for now.
-		k=$(cut -d = -f 1 <<< "$l")
-		v=${l:$((${#k}+1))}
-		tmp[$k]="$v"
-	done <<< "$c"
+	if [[ -f "$1" ]]
+	then
+		# Strip comments from file
+		c=$(grep -Ev '^(#|$)' "$1")
+
+		while IFS= read -r l
+		do
+			# This is really very primitive.
+			# But it does the job for now.
+			k=$(cut -d = -f 1 <<< "$l")
+			v=${l:$((${#k}+1))}
+			tmp[$k]="$v"
+		done <<< "$c"
+	fi
+
+	# Convert on/off values to integers
+	# TODO: case-insensitive, true, yes, 1, ...
+	[[ "${tmp[SYSLOG]}" == "on" ]] && cfg[SYSLOG]=1 || cfg[SYSLOG]=0
+	[[ "${tmp[QUIET]}" == "on" ]] && cfg[QUIET]=1 || cfg[QUIET]=0
+	[[ "${tmp[DEBUG]}" == "on" ]] && cfg[DEBUG]=1 || cfg[DEBUG]=0
 
 	[[ -z "${tmp[QUEUE]}" ]] \
 	&& log -e 78 "Empty QUEUE path in $(basename "$1")"
@@ -139,7 +147,7 @@ function read_config
 	# Queue directory: Absolute path or relative to $HOME
 	[[ -n "${tmp[QUEUE]}" && "${tmp[QUEUE]:0:1}" != "/" ]] \
 	&& cfg[QUEUE]="$HOME/${tmp[QUEUE]}" \
-	|| cfg[QUEUE]="${tmp[QUEUE]}" \
+	|| cfg[QUEUE]="${tmp[QUEUE]}"
 
 	[[ ! -d "${cfg[QUEUE]}" || ! -w "${cfg[QUEUE]}" ]] \
 	&& log -e 78 "Invalid QUEUE path: ${cfg[QUEUE]}"
@@ -148,12 +156,6 @@ function read_config
 	[[ -n "${tmp[LOGFILE]}" && "${tmp[LOGFILE]:0:1}" != "/" ]] \
 	&& cfg[LOGFILE]="$HOME/${tmp[LOGFILE]}" \
 	|| cfg[LOGFILE]="${tmp[LOGFILE]}"
-
-	# Convert on/off values to integers
-	# TODO: case-insensitive, true, yes, 1, ...
-	[[ "${tmp[SYSLOG]}" == "on" ]] && cfg[SYSLOG]=1 || cfg[SYSLOG]=0
-	[[ "${tmp[QUIET]}" == "on" ]] && cfg[QUIET]=1 || cfg[QUIET]=0
-	[[ "${tmp[DEBUG]}" == "on" ]] && cfg[DEBUG]=1 || cfg[DEBUG]=0
 
 	# Convert elements to integers
 	cfg[DEFER]=$(printf '%d' "${tmp[DEFER]}")
