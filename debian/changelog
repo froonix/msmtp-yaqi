@@ -1,8 +1,9 @@
-msmtp-yaqi (0.0.1-1) UNRELEASED; urgency=medium
+msmtp-yaqi (0.0.1-1) experimental; urgency=medium
 
   * Fix various bugs when ~/.msmtpq.conf doesn't exist.
+  * Stop header search after first blank line.
 
- -- Christian Schrötter <cs@fnx.li>  Mon, 29 Jun 2020 14:51:07 +0200
+ -- Christian Schrötter <cs@fnx.li>  Mon, 06 Jul 2020 17:39:10 +0200
 
 msmtp-yaqi (0.0.0-4) experimental; urgency=medium
 
