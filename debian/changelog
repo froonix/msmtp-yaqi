@@ -1,3 +1,9 @@
+msmtp-yaqi (0.0.2-1) experimental; urgency=medium
+
+  * Fix error while parsing empty config file.
+
+ -- Christian Schrötter <cs@fnx.li>  Mon, 06 Jul 2020 18:23:06 +0200
+
 msmtp-yaqi (0.0.1-1) experimental; urgency=medium
 
   * Fix various bugs when ~/.msmtpq.conf doesn't exist.

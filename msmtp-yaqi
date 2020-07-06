@@ -3,7 +3,7 @@
 #                                                                       #
 # msmtp-yaqi: Yet Another Queue Implementation for MSMTP                #
 # --------------------------------------------------------------------- #
-# Version 0.0.1 by Christian Schrötter <cs@fnx.li>                      #
+# Version 0.0.2 by Christian Schrötter <cs@fnx.li>                      #
 #                                                                       #
 # Inspired by msmtpq (Chris Gianniotis) and msmtpqueue (Martin Lambers) #
 #                                                                       #
@@ -127,11 +127,14 @@ function read_config
 
 		while IFS= read -r l
 		do
-			# This is really very primitive.
-			# But it does the job for now.
-			k=$(cut -d = -f 1 <<< "$l")
-			v=${l:$((${#k}+1))}
-			tmp[$k]="$v"
+			if [[ "${#l}" -gt 0 ]]
+			then
+				# This is really very primitive.
+				# But it does the job for now.
+				k=$(cut -d = -f 1 <<< "$l")
+				v=${l:$((${#k}+1))}
+				tmp[$k]="$v"
+			fi
 		done <<< "$c"
 	fi
 
