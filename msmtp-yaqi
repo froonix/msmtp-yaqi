@@ -351,7 +351,7 @@ display_queue()
 			&& printf '   Deferred: %s\n' "$(date -d @"$((queue_mtime+defer))" +'%Y-%m-%d %H:%M:%S %z')"
 		fi
 
-		grep -Eshi '^(Subject|From|To|CC|BCC):' <<< "$queue_content" | sort -i | sed 's/^/   /'
+		awk '/^$/{exit} 1' <<< "$queue_content" | grep -Eshi '^(Subject|From|To|CC|BCC):' | sort -i | sed 's/^/   /'
 		printf '   -- %dB (%dkB)\n' "$(wc -c <<< "$queue_content")" "$(du -k "$file" | cut -f 1)"
 	done
 
