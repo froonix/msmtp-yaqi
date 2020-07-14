@@ -1,4 +1,4 @@
-msmtp-yaqi (0.1.0-1) UNRELEASED; urgency=medium
+msmtp-yaqi (0.1.0-1) experimental; urgency=medium
 
   * Fix config bug.
   * Remove \r from mails.
@@ -6,7 +6,7 @@ msmtp-yaqi (0.1.0-1) UNRELEASED; urgency=medium
   * Archive sent mails.
   * (Un)hold feature.
 
- -- Christian Schrötter <cs@fnx.li>  Tue, 14 Jul 2020 12:38:17 +0200
+ -- Christian Schrötter <cs@fnx.li>  Tue, 14 Jul 2020 17:39:53 +0200
 
 msmtp-yaqi (0.0.2-1) experimental; urgency=medium
 

@@ -3,7 +3,7 @@
 #                                                                       #
 # msmtp-yaqi: Yet Another Queue Implementation for MSMTP                #
 # --------------------------------------------------------------------- #
-# Version 0.1.0-dev by Christian Schrötter <cs@fnx.li>                  #
+# Version 0.1.0 by Christian Schrötter <cs@fnx.li>                      #
 #                                                                       #
 # Inspired by msmtpq (Chris Gianniotis) and msmtpqueue (Martin Lambers) #
 #                                                                       #
