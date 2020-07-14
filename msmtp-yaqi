@@ -182,6 +182,10 @@ function read_config
 	[[ "${cfg[UNDEV]}" -lt 0 ]] && cfg[UNDEV]=0
 	[[ "${cfg[LIMIT]}" -lt 0 ]] && cfg[LIMIT]=0
 
+	# Copy remaining items
+	cfg[MSMTP]="${tmp[MSMTP]}"
+	cfg[LOGFILE_TIME_FORMAT]="${tmp[LOGFILE_TIME_FORMAT]}"
+
 	log -d "Read configuration from file $1"
 	log -d "--------------------------------------------------"
 	log -d "  \$cfg[MSMTP]=${cfg[MSMTP]}"
