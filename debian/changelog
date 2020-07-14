@@ -1,6 +1,9 @@
 msmtp-yaqi (0.1.0-1) UNRELEASED; urgency=medium
 
-  * ...
+  * Fix config bug.
+  * Remove \r from mails.
+  * Add headers at enqueue/sending.
+  * Archive sent mails.
 
  -- Christian Schrötter <cs@fnx.li>  Tue, 14 Jul 2020 12:38:17 +0200
 
