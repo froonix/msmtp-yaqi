@@ -110,6 +110,7 @@ function read_config
 	cfg[QUIET]=off
 	cfg[DEBUG]=off
 	cfg[HEADER]=off
+	cfg[ARCHIVE]=
 	cfg[DEFER]=300
 	cfg[UNDEV]=12
 	cfg[LIMIT]=0
@@ -162,6 +163,15 @@ function read_config
 	&& cfg[LOGFILE]="$HOME/${tmp[LOGFILE]}" \
 	|| cfg[LOGFILE]="${tmp[LOGFILE]}"
 
+	# Archive directory: Absolute path or relative to $HOME
+	[[ -n "${tmp[ARCHIVE]}" && "${tmp[ARCHIVE]:0:1}" != "/" ]] \
+	&& cfg[ARCHIVE]="$HOME/${tmp[ARCHIVE]}" \
+	|| cfg[ARCHIVE]="${tmp[ARCHIVE]}"
+
+	[[ -n "${cfg[ARCHIVE]}" ]] \
+	&& [[ ! -d "${cfg[ARCHIVE]}" || ! -w "${cfg[ARCHIVE]}" ]] \
+	&& log -e 78 "Invalid ARCHIVE path: ${cfg[ARCHIVE]}"
+
 	# Convert elements to integers
 	cfg[DEFER]=$(printf '%d' "${tmp[DEFER]}")
 	cfg[UNDEV]=$(printf '%d' "${tmp[UNDEV]}")
@@ -182,6 +192,7 @@ function read_config
 	log -d "  \$cfg[QUIET]=${cfg[QUIET]}"
 	log -d "  \$cfg[DEBUG]=${cfg[DEBUG]}"
 	log -d "  \$cfg[HEADER]=${cfg[HEADER]}"
+	log -d "  \$cfg[ARCHIVE]=${cfg[ARCHIVE]}"
 	log -d "  \$cfg[DEFER]=${cfg[DEFER]}"
 	log -d "  \$cfg[UNDEV]=${cfg[UNDEV]}"
 	log -d "  \$cfg[LIMIT]=${cfg[LIMIT]}"
@@ -289,8 +300,11 @@ send_mails()
 			continue
 		fi
 
-		log "Queued message sent: ID $q"
 		purge_mails "$q"
+		log "Queued message sent: ID $q"
+
+		[[ -n "${cfg[ARCHIVE]}" && ! -e "${cfg[ARCHIVE]}/$q.eml" ]] \
+		&& echo "$queue_content" > "${cfg[ARCHIVE]}/$q.eml"
 	done
 
 	return "$state"
@@ -578,6 +592,10 @@ then
 			echo '## Add additional headers at enqueue and while sending?'
 			echo '## Contains enqueue timestamp and internal retry counter.'
 			echo '#HEADER=off'
+			echo
+			echo '## Sent mails archive directory.'
+			echo '## Relative to $''HOME path!'
+			echo '#ARCHIVE='
 			echo
 			echo '## Wait time after failed delivery tries.'
 			echo '## Will be doubled after each failed retry!'
