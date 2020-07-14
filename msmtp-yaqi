@@ -109,6 +109,7 @@ function read_config
 	cfg[SYSLOG]=off
 	cfg[QUIET]=off
 	cfg[DEBUG]=off
+	cfg[HEADER]=off
 	cfg[DEFER]=300
 	cfg[UNDEV]=12
 	cfg[LIMIT]=0
@@ -141,8 +142,9 @@ function read_config
 	# Convert on/off values to integers
 	# TODO: case-insensitive, true, yes, 1, ...
 	[[ "${tmp[SYSLOG]}" == "on" ]] && cfg[SYSLOG]=1 || cfg[SYSLOG]=0
-	[[ "${tmp[QUIET]}" == "on" ]] && cfg[QUIET]=1 || cfg[QUIET]=0
-	[[ "${tmp[DEBUG]}" == "on" ]] && cfg[DEBUG]=1 || cfg[DEBUG]=0
+	[[ "${tmp[QUIET]}"  == "on" ]] && cfg[QUIET]=1  || cfg[QUIET]=0
+	[[ "${tmp[DEBUG]}"  == "on" ]] && cfg[DEBUG]=1  || cfg[DEBUG]=0
+	[[ "${tmp[HEADER]}" == "on" ]] && cfg[HEADER]=1 || cfg[HEADER]=0
 
 	[[ -z "${tmp[QUEUE]}" ]] \
 	&& log -e 78 "Empty QUEUE path in $(basename "$1")"
@@ -179,6 +181,7 @@ function read_config
 	log -d "  \$cfg[SYSLOG]=${cfg[SYSLOG]}"
 	log -d "  \$cfg[QUIET]=${cfg[QUIET]}"
 	log -d "  \$cfg[DEBUG]=${cfg[DEBUG]}"
+	log -d "  \$cfg[HEADER]=${cfg[HEADER]}"
 	log -d "  \$cfg[DEFER]=${cfg[DEFER]}"
 	log -d "  \$cfg[UNDEV]=${cfg[UNDEV]}"
 	log -d "  \$cfg[LIMIT]=${cfg[LIMIT]}"
@@ -236,6 +239,7 @@ send_mails()
 {
 	local q f file
 	local -i state=0
+	local -i c
 
 	for q in "$@"
 	do
@@ -258,8 +262,20 @@ send_mails()
 			continue
 		fi
 
+		get_details "$file"
+		c=$((queue_tries+1))
+
 		get_header "$file"
 		get_content "$file"
+
+		if [[ "${cfg[HEADER]}" -eq 1 ]]
+		then
+			# Prepend current timestamp as new header.
+			queue_content="X-MSMTP-Sent: $(date +'%a, %d %b %Y %T %z')"$'\n'"$queue_content"
+
+			# Prepend try-counter as new header.
+			queue_content="X-MSMTP-Try: $c"$'\n'"$queue_content"
+		fi
 
 		# shellcheck disable=SC2086
 		"${cfg[MSMTP]}" $queue_header \
@@ -268,9 +284,8 @@ send_mails()
 
 		if [[ "$state" -ne 0 ]]
 		then
-			# Increment try-counter in filename by renaming the queue file.
-			counter=$(cut -d , -f 2 <<< "$(basename "$file")"); mv "$file" "${cfg[QUEUE]}/$q,$((counter+1))"
-			log "Failed to send queued message: ID $q (try=$((counter+1))$([[ "${cfg[UNDEV]}" -gt 0 ]] && echo "/${cfg[UNDEV]}"); status=$state)"
+			log "Failed to send queued message: ID $q (try=$c$([[ "${cfg[UNDEV]}" -gt 0 ]] && echo "/${cfg[UNDEV]}"); status=$state)"
+			mv "$file" "${cfg[QUEUE]}/$q,$c" || log -e 74 "Could not increment try-counter: ID $q ($queue_tries -> $c)" # EX_IOERR
 			continue
 		fi
 
@@ -423,8 +438,17 @@ function enqueue_mail
 	[[ -f "$queue_file" ]] || ls "$queue_file",* &>/dev/null \
 	&& log -e 1 "Queue file already exists: ID $queue_id"
 
-	# Write escaped arguments and mail content to temporary queue file.
+	# Write escaped arguments to temporary queue file.
 	cat <<< "$(printf '%q\n' "$@" | tr '\n' ' ')" > "$queue_file" || log -e "$?" "Queue header write failed: ID $queue_id"
+
+	if [[ "${cfg[HEADER]}" -eq 1 ]]
+	then
+		# Prepend current timestamp as new header.
+		echo "X-MSMTP-Queue: $(date +'%a, %d %b %Y %T %z')" >> "$queue_file" \
+		|| log -e "$?" "Queue header injection failed: ID $queue_id"
+	fi
+
+	# Write mail content to temporary queue file.
 	cat | tr -d '\r' >> "$queue_file" || log -e "$?" "Queue content write failed: ID $queue_id"
 
 	# Move queue file to final destination with retry-counter value "0" appended.
@@ -550,6 +574,10 @@ then
 			echo '## Enable all debug messages? (Only for development!)'
 			echo '## Will be logged to file and syslog too if enabled.'
 			echo '#DEBUG=off'
+			echo
+			echo '## Add additional headers at enqueue and while sending?'
+			echo '## Contains enqueue timestamp and internal retry counter.'
+			echo '#HEADER=off'
 			echo
 			echo '## Wait time after failed delivery tries.'
 			echo '## Will be doubled after each failed retry!'
