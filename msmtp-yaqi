@@ -203,11 +203,14 @@ function read_config
 	log -d "--------------------------------------------------"
 }
 
+# hold_queue [-u]
 function hold_queue
 {
 	for file in "${cfg[QUEUE]}"/*-*-*,*
 	do
 		[[ ! -f "$file" ]] && continue
+
+		# shellcheck disable=SC2086
 		hold_mails ${1:-} "$(basename "$file" | cut -d , -f 1)"
 	done
 }
@@ -557,7 +560,6 @@ function holding
 	return $?
 }
 
-# hold_mails <ID> ...
 # hold_mails [-u] <ID> ...
 hold_mails()
 {
