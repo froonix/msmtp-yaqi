@@ -425,7 +425,7 @@ function enqueue_mail
 
 	# Write escaped arguments and mail content to temporary queue file.
 	cat <<< "$(printf '%q\n' "$@" | tr '\n' ' ')" > "$queue_file" || log -e "$?" "Queue header write failed: ID $queue_id"
-	cat >> "$queue_file" || log -e "$?" "Queue content write failed: ID $queue_id"
+	cat | tr -d '\r' >> "$queue_file" || log -e "$?" "Queue content write failed: ID $queue_id"
 
 	# Move queue file to final destination with retry-counter value "0" appended.
 	mv "$queue_file" "$queue_file,0" || log -e "$?" "Queue file release failed: ID $queue_id"
