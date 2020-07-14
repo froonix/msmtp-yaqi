@@ -656,6 +656,7 @@ then
 
 		R|H|U|p)
 			[[ -z "${1:-}" ]] && error "Too few arguments for option '$OP'"
+			[[ "$OP" == "-H" && "$1" == "-u" ]] && error "Invalid queue ID"
 			;;
 
 		e)
