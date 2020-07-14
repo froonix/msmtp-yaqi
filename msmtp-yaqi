@@ -208,6 +208,8 @@ function purge_queue
 	for file in "${cfg[QUEUE]}"/*-*-*,*
 	do
 		[[ ! -f "$file" ]] && continue
+		holding "$file" && continue
+
 		purge_mails "$(basename "$file" | cut -d , -f 1)"
 	done
 }
@@ -228,6 +230,7 @@ function run_queue
 	do
 		[[ ! -f "$file" ]] && continue
 		get_details "$file" -; ((c++))
+		[[ "$queue_hold" -eq 1 ]] && continue
 
 		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "$queue_tries" -gt 0 && "$((current-queue_mtime))" -lt "$((2**(queue_tries-1)*cfg[DEFER]))" ]]
 		then
@@ -238,7 +241,13 @@ function run_queue
 		send_mails "$queue_id" \
 		|| state=$?
 
-		[[ "${cfg[UNDEV]}" -gt 0 && "$((queue_tries+1))" -ge "${cfg[UNDEV]}" ]] && purge_mails "$queue_id"
+		[[ \
+			"$state" -ne 0 && \
+			"${cfg[UNDEV]}" -gt 0 && \
+			"$((queue_tries+1))" -ge "${cfg[UNDEV]}"\
+		 ]] \
+		 && purge_mails "$queue_id"
+
 		if [[ "$flush" -eq 0 && "${cfg[DEFER]}" -gt 0 && "${cfg[LIMIT]}" -gt 0 && "$c" -ge "${cfg[LIMIT]}" ]]
 		then
 			log -d "Per-run limit reached, stopping now..."
@@ -252,7 +261,7 @@ function run_queue
 # send_mails <ID> ...
 send_mails()
 {
-	local q f file
+	local q h='' f file
 	local -i state=0
 	local -i c
 
@@ -277,11 +286,13 @@ send_mails()
 			continue
 		fi
 
-		get_details "$file"
-		c=$((queue_tries+1))
-
 		get_header "$file"
 		get_content "$file"
+		get_details "$file"
+
+		c=$((queue_tries+1))
+		[[ "$queue_hold" -eq 1 ]] \
+		&& h="HOLD; "
 
 		if [[ "${cfg[HEADER]}" -eq 1 ]]
 		then
@@ -289,7 +300,7 @@ send_mails()
 			queue_content="X-MSMTP-Sent: $(date +'%a, %d %b %Y %T %z')"$'\n'"$queue_content"
 
 			# Prepend try-counter as new header.
-			queue_content="X-MSMTP-Try: $c"$'\n'"$queue_content"
+			[[ "$queue_hold" -eq 0 ]] && queue_content="X-MSMTP-Try: $c"$'\n'"$queue_content"
 		fi
 
 		# shellcheck disable=SC2086
@@ -299,8 +310,14 @@ send_mails()
 
 		if [[ "$state" -ne 0 ]]
 		then
-			log "Failed to send queued message: ID $q (try=$c$([[ "${cfg[UNDEV]}" -gt 0 ]] && echo "/${cfg[UNDEV]}"); status=$state)"
-			mv "$file" "${cfg[QUEUE]}/$q,$c" || log -e 74 "Could not increment try-counter: ID $q ($queue_tries -> $c)" # EX_IOERR
+			log "Failed to send queued message: ID $q (${h}try=${queue_tries}$([[ "${cfg[UNDEV]}" -gt 0 ]] && echo "/${cfg[UNDEV]}"); status=${state})"
+
+			if [[ "$queue_hold" -eq 0 ]]
+			then
+				mv "$file" "${cfg[QUEUE]}/$q,$c" \
+				|| log -e 74 "Could not increment try-counter: ID $q ($queue_rtries -> $c)" # EX_IOERR
+			fi
+
 			continue
 		fi
 
@@ -366,7 +383,10 @@ display_queue()
 		echo
 		echo -n " Message #$i in queue"
 
-		if [[ "$((queue_tries))" -gt 0 || "${cfg[UNDEV]}" -eq 1 ]]
+		if [[ "$queue_hold" -eq 1 ]]
+		then
+			echo " [HOLD]"
+		elif [[ "$((queue_tries))" -gt 0 || "${cfg[UNDEV]}" -eq 1 ]]
 		then
 			echo -n " (try $((queue_tries+1))"
 			[[ "${cfg[UNDEV]}" -gt 0 ]] \
@@ -403,8 +423,10 @@ function get_details
 {
 	local b
 	declare -g queue_id
+	declare -g -i queue_rtries=0
 	declare -g -i queue_tries=0
 	declare -g -i queue_mtime=0
+	declare -g -i queue_hold=-1
 
 	unset queue_id
 	unset queue_tries
@@ -412,10 +434,15 @@ function get_details
 
 	b=$(basename "$1")
 	queue_id=$(cut -d , -f 1 <<< "$b")
-	queue_tries=$(cut -d , -f 2 <<< "$b")
+	queue_rtries=$(cut -d , -f 2 <<< "$b")
+	queue_tries=${queue_rtries#-}
 
-	[[ -n "${2:-}" ]] && \
-	queue_mtime=$(stat -c %Y "$1")
+	holding "$b" \
+	&& queue_hold=1 \
+	|| queue_hold=0
+
+	[[ -n "${2:-}" ]] \
+	&& queue_mtime=$(stat -c %Y "$1")
 }
 
 # Get msmtp argument list from queue file.
@@ -514,6 +541,61 @@ function lock_queue
 	fi
 }
 
+# Message hold?
+function holding
+{
+	grep -qF ',-' <<< "$(basename "$1")"
+	return $?
+}
+
+# hold_mails <ID> ...
+# hold_mails [-u] <ID> ...
+hold_mails()
+{
+	local q n f file
+	local -i state=0
+	local -i action=1
+
+	if [[ "${1:-}" == '-u' ]]
+	then
+		action=0
+		shift
+	fi
+
+	for q in "$@"
+	do
+		q=$(basename "$q")
+		file=""
+
+		for f in "${cfg[QUEUE]}/$q",*
+		do
+			if [[ -f "$f" ]]
+			then
+				file=$f
+				break;
+			fi
+		done
+
+		if [[ -z "$file" ]]
+		then
+			stderr "Queue ID $q not found."
+			state=66 # EX_NOINPUT
+			continue
+		fi
+
+		get_details "$file"
+		[[ "$queue_hold" -eq "$action" ]] && continue
+		n=$queue_tries; [[ "$action" -eq 1 ]] && n=$((0-n))
+
+		mv "$file" "${cfg[QUEUE]}/$q,$n" \
+		|| log -e 74 "Could not (un)hold message: ID $q" # EX_IOERR
+		[[ "$action" -eq 1 ]] && log "Message from queue hold: ID $q"
+		[[ "$action" -ne 1 ]] && log "Message released into queue: ID $q"
+	done
+
+	return "$state"
+}
+
 # Trap callback.
 function cleanup
 {
@@ -557,7 +639,7 @@ then
 	shift
 
 	case "${OP:1}" in
-		f|r|R|p|a|d|'')
+		f|r|R|H|U|p|a|d|'')
 			;;
 
 		e)
@@ -641,6 +723,8 @@ then
 			stderr "  -f             flush mail queue (force delivery)"
 			stderr "  -r             run mail queue (honor wait times)"
 			stderr "  -R [<ID> ...]  send selected mail(s) from queue"
+			stderr "  -H [<ID> ...]  hold selected mail(s) in queue (do not deliver)"
+			stderr "  -U [<ID> ...]  release selected mail(s) from hold (deliver again)"
 			stderr "  -p [<ID> ...]  purge selected mail(s) from queue"
 			stderr "  -a             purge all mails from queue"
 			stderr "  -d             display mails in queue"
@@ -661,12 +745,14 @@ then
 	case "${OP:1}"
 	in
 
-		f) run_queue -f    ; ec=$? ;; # flush queue
-		r) run_queue       ; ec=$? ;; # run the queue (cron)
-		R) send_mails "$@" ; ec=$? ;; # send individual mail(s)
-		p) purge_mails "$@"; ec=$? ;; # purge individual mail(s)
-		a) purge_queue     ; ec=$? ;; # purge all mails in queue
-		*) display_queue   ; ec=$? ;; # display queue (default)
+		f) run_queue  -f     ; ec=$? ;; # flush queue
+		r) run_queue         ; ec=$? ;; # run the queue (cron)
+		R) send_mails    "$@"; ec=$? ;; # send individual mail(s)
+		H) hold_mails    "$@"; ec=$? ;; # hold individual mail(s)
+		U) hold_mails -u "$@"; ec=$? ;; # unhold individual mail(s)
+		p) purge_mails   "$@"; ec=$? ;; # purge individual mail(s)
+		a) purge_queue       ; ec=$? ;; # purge all mails in queue
+		*) display_queue     ; ec=$? ;; # display queue (default)
 
 	esac
 	lock_queue -u
