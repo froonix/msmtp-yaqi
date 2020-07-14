@@ -148,7 +148,7 @@ function read_config
 	[[ "${tmp[HEADER]}" == "on" ]] && cfg[HEADER]=1 || cfg[HEADER]=0
 
 	[[ -z "${tmp[QUEUE]}" ]] \
-	&& log -e 78 "Empty QUEUE path in $(basename "$1")"
+	&& log -e 78 "Empty QUEUE path in $(basename -- "$1")"
 
 	# Queue directory: Absolute path or relative to $HOME
 	[[ -n "${tmp[QUEUE]}" && "${tmp[QUEUE]:0:1}" != "/" ]] \
@@ -211,7 +211,7 @@ function hold_queue
 		[[ ! -f "$file" ]] && continue
 
 		# shellcheck disable=SC2086
-		hold_mails ${1:-} "$(basename "$file" | cut -d , -f 1)"
+		hold_mails ${1:-} "$(basename -- "$file" | cut -d , -f 1)"
 	done
 }
 
@@ -222,7 +222,7 @@ function purge_queue
 		[[ ! -f "$file" ]] && continue
 		holding "$file" && continue
 
-		purge_mails "$(basename "$file" | cut -d , -f 1)"
+		purge_mails "$(basename -- "$file" | cut -d , -f 1)"
 	done
 }
 
@@ -279,7 +279,7 @@ send_mails()
 
 	for q in "$@"
 	do
-		q=$(basename "$q")
+		q=$(basename -- "$q")
 		file=""
 
 		for f in "${cfg[QUEUE]}/$q",*
@@ -351,7 +351,7 @@ purge_mails()
 
 	for q in "$@"
 	do
-		q=$(basename "$q")
+		q=$(basename -- "$q")
 		file=""
 
 		for f in "${cfg[QUEUE]}/$q",*
@@ -444,7 +444,7 @@ function get_details
 	unset queue_tries
 	unset queue_mtime
 
-	b=$(basename "$1")
+	b=$(basename -- "$1")
 	queue_id=$(cut -d , -f 1 <<< "$b")
 	queue_rtries=$(cut -d , -f 2 <<< "$b")
 	queue_tries=${queue_rtries#-}
@@ -556,7 +556,7 @@ function lock_queue
 # Message hold?
 function holding
 {
-	grep -qF ',-' <<< "$(basename "$1")"
+	grep -qF ',-' <<< "$(basename -- "$1")"
 	return $?
 }
 
@@ -575,7 +575,7 @@ hold_mails()
 
 	for q in "$@"
 	do
-		q=$(basename "$q")
+		q=$(basename -- "$q")
 		file=""
 
 		for f in "${cfg[QUEUE]}/$q",*
@@ -624,7 +624,7 @@ function cleanup
 export LANG=C
 declare -i ec=0
 set -u -o pipefail
-BASECMD=$(basename "$0")
+BASECMD=$(basename -- "$0")
 unset queue_file
 unset locked
 umask 0077

@@ -1,6 +1,7 @@
-msmtp-yaqi (0.1.0-1) experimental; urgency=medium
+msmtp-yaqi (0.1.0-2) experimental; urgency=medium
 
   * Fix config bug.
+  * Fix various bugs.
   * Remove \r from mails.
   * Add headers at enqueue/sending.
   * Archive sent mails.
