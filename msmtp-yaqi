@@ -203,6 +203,15 @@ function read_config
 	log -d "--------------------------------------------------"
 }
 
+function hold_queue
+{
+	for file in "${cfg[QUEUE]}"/*-*-*,*
+	do
+		[[ ! -f "$file" ]] && continue
+		hold_mails ${1:-} "$(basename "$file" | cut -d , -f 1)"
+	done
+}
+
 function purge_queue
 {
 	for file in "${cfg[QUEUE]}"/*-*-*,*
@@ -639,7 +648,12 @@ then
 	shift
 
 	case "${OP:1}" in
-		f|r|R|H|U|p|a|d|'')
+		f|r|a|n|N|d|'')
+			[[ -n "${1:-}" ]] && error "Too many arguments for option '$OP'"
+			;;
+
+		R|H|U|p)
+			[[ -z "${1:-}" ]] && error "Too few arguments for option '$OP'"
 			;;
 
 		e)
@@ -727,6 +741,8 @@ then
 			stderr "  -U [<ID> ...]  release selected mail(s) from hold (deliver again)"
 			stderr "  -p [<ID> ...]  purge selected mail(s) from queue"
 			stderr "  -a             purge all mails from queue"
+			stderr "  -n             hold all mails at queue"
+			stderr "  -N             unhold all mails at queue"
 			stderr "  -d             display mails in queue"
 			stderr "  -e             show example config"
 			stderr "  -h             show help message"
@@ -745,14 +761,16 @@ then
 	case "${OP:1}"
 	in
 
-		f) run_queue  -f     ; ec=$? ;; # flush queue
-		r) run_queue         ; ec=$? ;; # run the queue (cron)
-		R) send_mails    "$@"; ec=$? ;; # send individual mail(s)
-		H) hold_mails    "$@"; ec=$? ;; # hold individual mail(s)
-		U) hold_mails -u "$@"; ec=$? ;; # unhold individual mail(s)
-		p) purge_mails   "$@"; ec=$? ;; # purge individual mail(s)
-		a) purge_queue       ; ec=$? ;; # purge all mails in queue
-		*) display_queue     ; ec=$? ;; # display queue (default)
+		f) run_queue   -f      ; ec=$? ;; # flush queue
+		r) run_queue           ; ec=$? ;; # run the queue (cron)
+		R) send_mails     "$@" ; ec=$? ;; # send individual mail(s)
+		H) hold_mails     "$@" ; ec=$? ;; # hold individual mail(s)
+		U) hold_mails  -u "$@" ; ec=$? ;; # unhold individual mail(s)
+		p) purge_mails    "$@" ; ec=$? ;; # purge individual mail(s)
+		a) purge_queue         ; ec=$? ;; # purge all mails in queue
+		n) hold_queue          ; ec=$? ;; # hold all mails at queue
+		N) hold_queue  -u      ; ec=$? ;; # unhold all mails at queue
+		*) display_queue       ; ec=$? ;; # display queue (default)
 
 	esac
 	lock_queue -u
