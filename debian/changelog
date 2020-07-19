@@ -1,3 +1,9 @@
+msmtp-yaqi (0.1.1-1) experimental; urgency=medium
+
+  * Hotfix: Hold mails with retry-counter 0.
+
+ -- Christian Schrötter <cs@fnx.li>  Sun, 19 Jul 2020 15:34:13 +0200
+
 msmtp-yaqi (0.1.0-3) experimental; urgency=medium
 
   * Fix config bug.
