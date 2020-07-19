@@ -1,3 +1,14 @@
+msmtp-yaqi (0.1.0-3) experimental; urgency=medium
+
+  * Fix config bug.
+  * Fix various bugs.
+  * Remove \r from mails.
+  * Add headers at enqueue/sending.
+  * Archive sent mails.
+  * (Un)hold feature.
+
+ -- Christian Schrötter <cs@fnx.li>  Sun, 19 Jul 2020 15:07:35 +0200
+
 msmtp-yaqi (0.0.2-1) experimental; urgency=medium
 
   * Fix error while parsing empty config file.
