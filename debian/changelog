@@ -1,3 +1,10 @@
+msmtp-yaqi (0.2.0-1) UNRELEASED; urgency=medium
+
+  * Implement daemon mode.
+  * Fix various bugs.
+
+ -- Christian Schrötter <cs@fnx.li>  Tue, 16 Apr 2024 21:34:34 +0200
+
 msmtp-yaqi (0.1.1-1) experimental; urgency=medium
 
   * Hotfix: Hold mails with retry-counter 0.
