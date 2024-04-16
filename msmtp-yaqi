@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2320
 #########################################################################
 #                                                                       #
 # msmtp-yaqi: Yet Another Queue Implementation for MSMTP                #
@@ -462,7 +463,7 @@ function get_header()
 {
 	declare -g queue_header
 	queue_header=$(head -n 1 "$1" 2>/dev/null)
-	[[ -z "$queue_header" ]] && log -e "$?" "Could not read header from queue file $1"
+	[[ -z "$queue_header" ]] && log -e 74 "Could not read header from queue file $1"
 }
 
 # Get real mail content from queue file.
@@ -470,7 +471,7 @@ function get_content()
 {
 	declare -g queue_content
 	queue_content=$(tail -n +2 "$1" 2>/dev/null)
-	[[ -z "$queue_content" ]] && log -e "$?" "Could not read content from queue file $1"
+	[[ -z "$queue_content" ]] && log -e 74 "Could not read content from queue file $1"
 }
 
 # Insert mail from STDIN into queue.
@@ -492,11 +493,12 @@ function enqueue_mail
 	# changing existing files. Theoretical it's not required to do
 	# the following check, because race-conditions are impossible,
 	# as long there's only one host writing to this queue directory.
-	[[ -f "$queue_file" ]] || ls "$queue_file",* &>/dev/null \
-	&& log -e 1 "Queue file already exists: ID $queue_id"
+	[[ -f "$queue_file" ]] || ls -- "$queue_file",* &>/dev/null \
+	&& log -e 74 "Queue file already exists: ID $queue_id"
 
 	# Write escaped arguments to temporary queue file.
-	cat <<< "$(printf '%q\n' "$@" | tr '\n' ' ')" > "$queue_file" || log -e "$?" "Queue header write failed: ID $queue_id"
+	cat <<< "$(printf '%q\n' "$@" | tr '\n' ' ')" > "$queue_file" \
+	|| log -e "$?" "Queue header write failed: ID $queue_id"
 
 	if [[ "${cfg[HEADER]}" -eq 1 ]]
 	then
@@ -638,6 +640,7 @@ function daemon_fallback
 }
 
 # Trap callback.
+# shellcheck disable=SC2317
 function cleanup
 {
 	declare -g locked
