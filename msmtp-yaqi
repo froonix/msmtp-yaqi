@@ -637,20 +637,26 @@ read_config ~/.msmtpq.conf
 # and delete $queue_file
 trap cleanup EXIT
 
+# todo: move to the top!
+function daemon_events
+{
+	while IFS=$'\n' read -r timestamp
+	do
+		echo "event received: $timestamp"
+
+		# (read stdin line by line, sleep 1s, check last timestamp of event)
+		# ...
+	done
+}
+
 if [[ "${1:-}" == '--q-mgmt' ]]
 then
 	BASECMD=msmtp-queue
 	shift
-# daemon mode
 elif [[ "${1:-}" == '--daemon' ]]
 then
-	echo "daemon mode"
-	exit 1
-
-	# inotifywait --monitor --include '^.+-.+-.+,[^-]+$' --format '%T' --timefmt '%s' --event moved_to ... \
-	# | msmtp-yaqi --daemon-events &[disown] (read stdin line by line, sleep 1s, check last timestamp of event)
-
-	# fallback loop: run queue after ~60s
+	BASECMD=msmtp-daemon
+	shift
 fi
 
 # msmtp-queue - queue management mode
@@ -733,18 +739,23 @@ then
 		h)
 			stderr "Usage: msmtpq [sendmail options]"
 			stderr
-			stderr "    or msmtpq --daemon"
 			stderr "    or msmtpq --q-mgmt <OP> [<ARGS> ...]"
 			stderr "    or msmtp-queue <OP> [<ARGS> ...]"
+			stderr
+			stderr "    or msmtpq --daemon"
+			stderr "    or msmtp-daemon"
 			stderr
 			stderr "Yet Another Queue Implementation for MSMTP"
 			stderr
 			stderr "Sendmail mode:"
 			stderr
-			stderr "  Just send your mail content to STDIN."
-			stderr "  Your message will be added to the queue."
-			stderr "  Don't forget to setup a queue-run cronjob!"
-			stderr "  Otherwise it'll be held forever in queue."
+			stderr "  Just send your mail content to STDIN. Your message will be added to the queue."
+			stderr "  Don't forget to setup a queue-run cronjob! Otherwise it'll be held forever in queue."
+			stderr
+			stderr "Daemon mode:"
+			stderr
+			stderr "  Runs the mail queue every 90 seconds and when new messages are queued."
+			stderr "  Alternatively use a regular cronjob or Systemd timer: msmtp-queue -r"
 			stderr
 			stderr "Queue management options:"
 			stderr
@@ -788,6 +799,14 @@ then
 
 	esac
 	lock_queue -u
+# daemon mode (inotifywait)
+elif [[ "$BASECMD" == 'msmtp-daemon' ]]
+then
+	[[ -n "$*" ]] && error "Options not supported at daemon mode!"
+	command -v inotifywait &>/dev/null || error "inotifywait is required for daemon mode!"
+	inotifywait -q -m -e moved_to --include '^.+-.+-.+,[^-]+$' --format '%T' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events &
+	while true; do sleep 90; echo run_queue; done
+	exit 1
 # sendmail mode
 else
 	enqueue_mail "$@"
