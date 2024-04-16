@@ -11,5 +11,5 @@ Architecture: all
 Multi-Arch: foreign
 Provides: msmtpq, msmtp-queue, msmtp-daemon
 Depends: ${misc:Depends}, ${shlibs:Depends}, msmtp
-Suggests: inotify-tools
+Recommends: inotify-tools
 Description: Yet Another Queue Implementation for MSMTP

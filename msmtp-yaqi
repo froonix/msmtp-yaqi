@@ -271,7 +271,7 @@ function run_queue
 }
 
 # send_mails <ID> ...
-send_mails()
+function send_mails()
 {
 	local q h='' f file
 	local -i state=0
@@ -344,7 +344,7 @@ send_mails()
 }
 
 # purge_mails <ID> ...
-purge_mails()
+function purge_mails()
 {
 	local q f file
 	local -i state=0
@@ -378,7 +378,7 @@ purge_mails()
 }
 
 # Display queue contents.
-display_queue()
+function display_queue()
 {
 	local -i i=0
 	local -i current
@@ -458,7 +458,7 @@ function get_details
 }
 
 # Get msmtp argument list from queue file.
-get_header()
+function get_header()
 {
 	declare -g queue_header
 	queue_header=$(head -n 1 "$1" 2>/dev/null)
@@ -466,7 +466,7 @@ get_header()
 }
 
 # Get real mail content from queue file.
-get_content()
+function get_content()
 {
 	declare -g queue_content
 	queue_content=$(tail -n +2 "$1" 2>/dev/null)
@@ -561,7 +561,7 @@ function holding
 }
 
 # hold_mails [-u] <ID> ...
-hold_mails()
+function hold_mails()
 {
 	local q n f file
 	local -i state=0
@@ -607,6 +607,36 @@ hold_mails()
 	return "$state"
 }
 
+# inotifywait worker
+function daemon_events
+{
+	local last=0
+	while IFS=$'\n' read -r timestamp
+	do
+		[[ "$last" == "$timestamp" ]] && continue
+		log -d "New event received: $timestamp"
+		last=$timestamp
+		sleep 1
+
+		lock_queue
+		run_queue
+		lock_queue -u
+	done
+}
+
+function daemon_fallback
+{
+	BASECMD+=" (fallback)"
+	while true
+	do
+		lock_queue
+		run_queue
+		lock_queue -u
+
+		sleep 90
+	done
+}
+
 # Trap callback.
 function cleanup
 {
@@ -636,18 +666,6 @@ read_config ~/.msmtpq.conf
 # Remove queue locking
 # and delete $queue_file
 trap cleanup EXIT
-
-# todo: move to the top!
-function daemon_events
-{
-	while IFS=$'\n' read -r timestamp
-	do
-		echo "event received: $timestamp"
-
-		# (read stdin line by line, sleep 1s, check last timestamp of event)
-		# ...
-	done
-}
 
 if [[ "${1:-}" == '--q-mgmt' ]]
 then
@@ -803,9 +821,10 @@ then
 elif [[ "$BASECMD" == 'msmtp-daemon' ]]
 then
 	[[ -n "$*" ]] && error "Options not supported at daemon mode!"
-	command -v inotifywait &>/dev/null || error "inotifywait is required for daemon mode!"
-	inotifywait -q -m -e moved_to --include '^.+-.+-.+,[^-]+$' --format '%T' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events &
-	while true; do sleep 90; echo run_queue; done
+	command -v inotifywait &>/dev/null || error "inotifywait is required for daemon mode! (Maybe package inotify-tools missing?)"
+	command -v "${cfg[MSMTP]}" &>/dev/null || error "${cfg[MSMTP]} binary not found! Install it or change MSMTP config variable."
+	inotifywait -q -m -e moved_to --include '^.+-.+-.+,0$' --format '%T' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events &
+	daemon_fallback
 	exit 1
 # sendmail mode
 else
