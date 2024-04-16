@@ -3,7 +3,7 @@
 #                                                                       #
 # msmtp-yaqi: Yet Another Queue Implementation for MSMTP                #
 # --------------------------------------------------------------------- #
-# Version 0.1.1 by Christian Schrötter <cs@fnx.li>                      #
+# Version DEV by Christian Schrötter <cs@fnx.li>                        #
 #                                                                       #
 # Inspired by msmtpq (Chris Gianniotis) and msmtpqueue (Martin Lambers) #
 #                                                                       #
@@ -641,6 +641,16 @@ if [[ "${1:-}" == '--q-mgmt' ]]
 then
 	BASECMD=msmtp-queue
 	shift
+# daemon mode
+elif [[ "${1:-}" == '--daemon' ]]
+then
+	echo "daemon mode"
+	exit 1
+
+	# inotifywait --monitor --include '^.+-.+-.+,[^-]+$' --format '%T' --timefmt '%s' --event moved_to ... \
+	# | msmtp-yaqi --daemon-events &[disown] (read stdin line by line, sleep 1s, check last timestamp of event)
+
+	# fallback loop: run queue after ~60s
 fi
 
 # msmtp-queue - queue management mode
@@ -723,6 +733,7 @@ then
 		h)
 			stderr "Usage: msmtpq [sendmail options]"
 			stderr
+			stderr "    or msmtpq --daemon"
 			stderr "    or msmtpq --q-mgmt <OP> [<ARGS> ...]"
 			stderr "    or msmtp-queue <OP> [<ARGS> ...]"
 			stderr
@@ -777,6 +788,7 @@ then
 
 	esac
 	lock_queue -u
+# sendmail mode
 else
 	enqueue_mail "$@"
 fi
