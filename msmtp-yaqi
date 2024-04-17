@@ -613,6 +613,8 @@ function hold_mails()
 function daemon_events
 {
 	local last=0
+	cfg[LIMIT]=0
+
 	while IFS=$'\n' read -r timestamp
 	do
 		[[ "$last" == "$timestamp" ]] && continue
@@ -620,9 +622,8 @@ function daemon_events
 		last=$timestamp
 		sleep 1
 
-		lock_queue
-		run_queue
-		lock_queue -u
+		# IMPORTANT: DO NOT REMOVE THIS SUBSHELL!
+		(lock_queue && run_queue; lock_queue -u)
 	done
 }
 
@@ -631,9 +632,8 @@ function daemon_fallback
 	BASECMD+=" (fallback)"
 	while true
 	do
-		lock_queue
-		run_queue
-		lock_queue -u
+		# IMPORTANT: DO NOT REMOVE THIS SUBSHELL!
+		(lock_queue && run_queue; lock_queue -u)
 
 		sleep 90
 	done
@@ -695,6 +695,7 @@ function example_config
 	echo '#UNDEV=12'
 	echo
 	echo '## Maximum elements per run with -r.'
+	echo '## This value is ignored in daemon mode!'
 	echo '## Works only, when DEFER is enabled.'
 	echo '## This feature is disabled by default.'
 	echo '#LIMIT=0'
@@ -703,27 +704,31 @@ function example_config
 
 function usage_msg
 {
-	stderr "Usage: msmtpq [sendmail options]"
+	stderr "Usage: msmtp-yaqi [sendmail options]"
+	stderr "    or msmtpq [sendmail options]"
 	stderr
-	stderr "    or msmtpq --q-mgmt <OP> [<ARGS> ...]"
+	stderr "    or msmtp-yaqi --q-mgmt <OP> [<ARGS> ...]"
 	stderr "    or msmtp-queue <OP> [<ARGS> ...]"
 	stderr
-	stderr "    or msmtpq --daemon [-h]"
+	stderr "    or msmtp-yaqi --daemon [-h]"
 	stderr "    or msmtp-daemon [-h]"
 	stderr
 	stderr "Yet Another Queue Implementation for MSMTP"
 	stderr
 	stderr "Sendmail mode:"
 	stderr
-	stderr "  Just send your mail content to STDIN. Your message will be added to the queue."
-	stderr "  Don't forget to setup a queue-run cronjob! Otherwise it'll be held forever in queue."
+	stderr "  Just send your mail content to STDIN. Your message will"
+	stderr "  be added to the queue. Don't forget to setup a queue-run"
+	stderr "  cronjob or start the built-in daemon! Otherwise your"
+	stderr "  messages will be held forever in queue."
 	stderr
-	stderr "Daemon mode:"
+	stderr "Daemon mode (--daemon):"
 	stderr
-	stderr "  Runs the mail queue every 90 seconds and when new messages are queued."
-	stderr "  Alternatively use a regular cronjob or Systemd timer: msmtp-queue -r"
+	stderr "  Runs the mail queue every 90 seconds and when new"
+	stderr "  messages are queued. Alternatively use a regular"
+	stderr "  queue-run cronjob: msmtp-yaqi --q-mgmt -r"
 	stderr
-	stderr "Queue management options:"
+	stderr "Queue management options (--q-mgmt):"
 	stderr
 	stderr "  -f             flush mail queue (force delivery)"
 	stderr "  -r             run mail queue (honor wait times)"
@@ -771,14 +776,17 @@ read_config ~/.msmtpq.conf
 # and delete $queue_file
 trap cleanup EXIT
 
-if [[ "${1:-}" == '--q-mgmt' ]]
+if [[ "$BASECMD" != "msmtp-daemon" && "$BASECMD" != "msmtp-queue" ]]
 then
-	BASECMD=msmtp-queue
-	shift
-elif [[ "${1:-}" == '--daemon' ]]
-then
-	BASECMD=msmtp-daemon
-	shift
+	if [[ "${1:-}" == '--daemon' ]]
+	then
+		BASECMD=msmtp-daemon
+		shift
+	elif [[ "${1:-}" == '--q-mgmt' ]]
+	then
+		BASECMD=msmtp-queue
+		shift
+	fi
 fi
 
 # msmtp-queue - queue management mode
@@ -830,14 +838,14 @@ then
 
 	esac
 	lock_queue -u
-# daemon mode (inotifywait)
+# msmtp-daemon - daemon mode (inotifywait)
 elif [[ "$BASECMD" == 'msmtp-daemon' ]]
 then
 	[[ "${1:-}" == "-h" ]] && usage_msg
 	[[ -n "$*" ]] && error "Option not supported at daemon mode!" "Try '-h' for more information."
-	command -v inotifywait &>/dev/null || error "inotifywait is required for daemon mode! (Maybe package inotify-tools missing?)"
+	command -v 'inotifywait' &>/dev/null || error "inotifywait is required for daemon mode! (Maybe package inotify-tools missing?)"
 	command -v "${cfg[MSMTP]}" &>/dev/null || error "${cfg[MSMTP]} binary not found! Install it or change MSMTP config variable."
-	inotifywait -q -m -e moved_to --include '^.+-.+-.+,0$' --format '%T' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events &
+	inotifywait -q -m -e 'moved_to' --include '^.+-.+-.+,0$' --format '%T' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events &
 	daemon_fallback
 	exit 1
 # sendmail mode
