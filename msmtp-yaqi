@@ -83,7 +83,7 @@ function log
 	for msg in "$@"
 	do
 		# Output message to STDERR (if enabled)
-		[[ "${cfg[QUIET]}" -eq 0 ]] && stderr "$BASECMD: $msg"
+		[[ "${cfg[QUIET]}" -eq 0 ]] && warning "$msg"
 
 		# Send message to syslog (if enabled)
 		[[ "${cfg[SYSLOG]}" -eq 1 ]] && logger -t "${BASECMD}[$$]" -p "$facility" -- "$msg"
@@ -615,7 +615,19 @@ function hold_mails()
 	return "$state"
 }
 
-# inotifywait worker
+# Background process for inotifywait
+function daemon_worker
+{
+	while true
+	do
+		log -d "Starting inotifywait for queue directory: ${cfg[QUEUE]}"
+		inotifywait -q -m -e 'moved_to' --format '%T %f' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events
+		log -w "inotifywait died with status $?! Restarting in 10 seconds..."
+		sleep 10
+	done
+}
+
+# inotifywait event processor
 function daemon_events
 {
 	local -a event
@@ -641,6 +653,8 @@ function daemon_events
 	done
 }
 
+# Periodical queue-run at daemon-mode.
+# Required for further sending attempts.
 function daemon_fallback
 {
 	BASECMD+="-fallback"
@@ -861,9 +875,9 @@ then
 	[[ "${cfg[LIMIT]}" -ne 0 ]] && { cfg[LIMIT]=0; warning "[WARNING] Configuration variable LIMIT is ignored at daemon mode."; }
 	command -v 'inotifywait' &>/dev/null || error "inotifywait is required for daemon mode! (Maybe package inotify-tools missing?)"
 	command -v "${cfg[MSMTP]}" &>/dev/null || error "${cfg[MSMTP]} binary not found! Install it or change MSMTP config variable."
-	inotifywait -q -m -e 'moved_to' --format '%T %f' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events &
+	daemon_worker &
 	daemon_fallback
-	exit 1
+	ec=1
 # sendmail mode
 else
 	enqueue_mail "$@"
