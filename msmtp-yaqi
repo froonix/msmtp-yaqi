@@ -24,8 +24,7 @@ function stderr
 
 # Multi-line version of stderr().
 # Adds the program basename as prefix.
-# And exits after outputting all lines.
-function error
+function warning
 {
 	local var
 
@@ -33,7 +32,14 @@ function error
 	do
 		stderr "$BASECMD: $var"
 	done
+}
 
+# Multi-line version of stderr().
+# Adds the program basename as prefix.
+# And exits after outputting all lines.
+function error
+{
+	warning "$@"
 	exit 1
 }
 
@@ -550,7 +556,7 @@ function lock_queue
 
 	elif [[ "$1" == '-u' && "${locked:-0}" -eq 1 ]]
 	then
-		#log -d "Removing lockfile: $lock"
+		log -d "Removing lock..."
 		rmdir "$lock"; locked=0
 	fi
 }
@@ -612,28 +618,37 @@ function hold_mails()
 # inotifywait worker
 function daemon_events
 {
-	local last=0
-	cfg[LIMIT]=0
+	local -a event
+	local filename
+	local timestamp
+	local last=''
 
-	while IFS=$'\n' read -r timestamp
+	while IFS=$'\n' read -r line
 	do
+		read -ra event <<< "$line"
+		timestamp=${event[0]}
+		filename=${event[1]}
+
+		[[ "$filename" =~ ^.+-.+-.+,0$ ]] || continue
 		[[ "$last" == "$timestamp" ]] && continue
-		log -d "New event received: $timestamp"
+
+		log -d "New event received: $timestamp ($filename)"
 		last=$timestamp
 		sleep 1
 
 		# IMPORTANT: DO NOT REMOVE THIS SUBSHELL!
-		(lock_queue && run_queue; lock_queue -u)
+		lock_queue && { (run_queue); lock_queue -u; }
 	done
 }
 
 function daemon_fallback
 {
 	BASECMD+=" (fallback)"
+
 	while true
 	do
 		# IMPORTANT: DO NOT REMOVE THIS SUBSHELL!
-		(lock_queue && run_queue; lock_queue -u)
+		lock_queue && { (run_queue); lock_queue -u; }
 
 		sleep 90
 	done
@@ -843,9 +858,10 @@ elif [[ "$BASECMD" == 'msmtp-daemon' ]]
 then
 	[[ "${1:-}" == "-h" ]] && usage_msg
 	[[ -n "$*" ]] && error "Option not supported at daemon mode!" "Try '-h' for more information."
+	[[ "${cfg[LIMIT]}" -ne 0 ]] && { cfg[LIMIT]=0; warning "[WARNING] Configuration variable LIMIT is ignored at daemon mode."; }
 	command -v 'inotifywait' &>/dev/null || error "inotifywait is required for daemon mode! (Maybe package inotify-tools missing?)"
 	command -v "${cfg[MSMTP]}" &>/dev/null || error "${cfg[MSMTP]} binary not found! Install it or change MSMTP config variable."
-	inotifywait -q -m -e 'moved_to' --include '^.+-.+-.+,0$' --format '%T' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events &
+	inotifywait -q -m -e 'moved_to' --format '%T %f' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events &
 	daemon_fallback
 	exit 1
 # sendmail mode
