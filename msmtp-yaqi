@@ -643,7 +643,7 @@ function daemon_events
 
 function daemon_fallback
 {
-	BASECMD+=" (fallback)"
+	BASECMD+="-fallback"
 
 	while true
 	do
