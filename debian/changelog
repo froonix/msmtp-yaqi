@@ -1,9 +1,9 @@
-msmtp-yaqi (0.2.0-4) experimental; urgency=medium
+msmtp-yaqi (0.2.0-5) experimental; urgency=medium
 
   * Implement daemon mode.
   * Various small improvements.
 
- -- Christian Schrötter <cs@fnx.li>  Tue, 18 Apr 2024 01:25:57 +0200
+ -- Christian Schrötter <cs@fnx.li>  Mon, 29 Apr 2024 14:23:51 +0200
 
 msmtp-yaqi (0.1.1-1) experimental; urgency=medium
 

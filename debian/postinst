@@ -6,9 +6,9 @@ case "${1}" in
 		;;
 
 	configure)
-		update-alternatives --install /usr/bin/msmtpq       msmtpq       /usr/bin/msmtp-yaqi 100
-		update-alternatives --install /usr/bin/msmtp-queue  msmtp-queue  /usr/bin/msmtp-yaqi 100
-		update-alternatives --install /usr/bin/msmtp-daemon msmtp-daemon /usr/bin/msmtp-yaqi 100
+		update-alternatives --install /usr/bin/msmtpq             msmtpq             /usr/bin/msmtp-yaqi 100
+		update-alternatives --install /usr/bin/msmtp-queue        msmtp-queue        /usr/bin/msmtp-yaqi 100
+		update-alternatives --install /usr/bin/msmtp-queue-daemon msmtp-queue-daemon /usr/bin/msmtp-yaqi 100
 		;;
 
 	*)

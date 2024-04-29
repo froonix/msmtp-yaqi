@@ -740,7 +740,7 @@ function usage_msg
 	stderr "    or msmtp-queue <OP> [<ARGS> ...]"
 	stderr
 	stderr "    or msmtp-yaqi --daemon [-h]"
-	stderr "    or msmtp-daemon [-h]"
+	stderr "    or msmtp-queue-daemon [-h]"
 	stderr
 	stderr "Yet Another Queue Implementation for MSMTP"
 	stderr
@@ -805,11 +805,11 @@ read_config ~/.msmtpq.conf
 # and delete $queue_file
 trap cleanup EXIT
 
-if [[ "$BASECMD" != "msmtp-daemon" && "$BASECMD" != "msmtp-queue" ]]
+if [[ "$BASECMD" != "msmtp-queue-daemon" && "$BASECMD" != "msmtp-queue" ]]
 then
 	if [[ "${1:-}" == '--daemon' ]]
 	then
-		BASECMD=msmtp-daemon
+		BASECMD=msmtp-queue-daemon
 		shift
 	elif [[ "${1:-}" == '--q-mgmt' ]]
 	then
@@ -867,8 +867,8 @@ then
 
 	esac
 	lock_queue -u
-# msmtp-daemon - daemon mode (inotifywait)
-elif [[ "$BASECMD" == 'msmtp-daemon' ]]
+# msmtp-queue-daemon - daemon mode (inotifywait)
+elif [[ "$BASECMD" == 'msmtp-queue-daemon' ]]
 then
 	[[ "${1:-}" == "-h" ]] && usage_msg
 	[[ -n "$*" ]] && error "Option not supported at daemon mode!" "Try '-h' for more information."
