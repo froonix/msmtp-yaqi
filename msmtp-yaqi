@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2320
 #########################################################################
 #                                                                       #
 # msmtp-yaqi: Yet Another Queue Implementation for MSMTP                #
 # --------------------------------------------------------------------- #
-# Version 0.1.1 by Christian Schrötter <cs@fnx.li>                      #
+# Version 0.2.0 by Christian Schrötter <cs@fnx.li>                      #
 #                                                                       #
 # Inspired by msmtpq (Chris Gianniotis) and msmtpqueue (Martin Lambers) #
 #                                                                       #
@@ -23,8 +24,7 @@ function stderr
 
 # Multi-line version of stderr().
 # Adds the program basename as prefix.
-# And exits after outputting all lines.
-function error
+function warning
 {
 	local var
 
@@ -32,7 +32,14 @@ function error
 	do
 		stderr "$BASECMD: $var"
 	done
+}
 
+# Multi-line version of stderr().
+# Adds the program basename as prefix.
+# And exits after outputting all lines.
+function error
+{
+	warning "$@"
 	exit 1
 }
 
@@ -76,7 +83,7 @@ function log
 	for msg in "$@"
 	do
 		# Output message to STDERR (if enabled)
-		[[ "${cfg[QUIET]}" -eq 0 ]] && stderr "$BASECMD: $msg"
+		[[ "${cfg[QUIET]}" -eq 0 ]] && warning "$msg"
 
 		# Send message to syslog (if enabled)
 		[[ "${cfg[SYSLOG]}" -eq 1 ]] && logger -t "${BASECMD}[$$]" -p "$facility" -- "$msg"
@@ -271,7 +278,7 @@ function run_queue
 }
 
 # send_mails <ID> ...
-send_mails()
+function send_mails()
 {
 	local q h='' f file
 	local -i state=0
@@ -344,7 +351,7 @@ send_mails()
 }
 
 # purge_mails <ID> ...
-purge_mails()
+function purge_mails()
 {
 	local q f file
 	local -i state=0
@@ -378,7 +385,7 @@ purge_mails()
 }
 
 # Display queue contents.
-display_queue()
+function display_queue()
 {
 	local -i i=0
 	local -i current
@@ -458,19 +465,19 @@ function get_details
 }
 
 # Get msmtp argument list from queue file.
-get_header()
+function get_header()
 {
 	declare -g queue_header
 	queue_header=$(head -n 1 "$1" 2>/dev/null)
-	[[ -z "$queue_header" ]] && log -e "$?" "Could not read header from queue file $1"
+	[[ -z "$queue_header" ]] && log -e 74 "Could not read header from queue file $1"
 }
 
 # Get real mail content from queue file.
-get_content()
+function get_content()
 {
 	declare -g queue_content
 	queue_content=$(tail -n +2 "$1" 2>/dev/null)
-	[[ -z "$queue_content" ]] && log -e "$?" "Could not read content from queue file $1"
+	[[ -z "$queue_content" ]] && log -e 74 "Could not read content from queue file $1"
 }
 
 # Insert mail from STDIN into queue.
@@ -492,11 +499,12 @@ function enqueue_mail
 	# changing existing files. Theoretical it's not required to do
 	# the following check, because race-conditions are impossible,
 	# as long there's only one host writing to this queue directory.
-	[[ -f "$queue_file" ]] || ls "$queue_file",* &>/dev/null \
-	&& log -e 1 "Queue file already exists: ID $queue_id"
+	[[ -f "$queue_file" ]] || ls -- "$queue_file",* &>/dev/null \
+	&& log -e 74 "Queue file already exists: ID $queue_id"
 
 	# Write escaped arguments to temporary queue file.
-	cat <<< "$(printf '%q\n' "$@" | tr '\n' ' ')" > "$queue_file" || log -e "$?" "Queue header write failed: ID $queue_id"
+	cat <<< "$(printf '%q\n' "$@" | tr '\n' ' ')" > "$queue_file" \
+	|| log -e "$?" "Queue header write failed: ID $queue_id"
 
 	if [[ "${cfg[HEADER]}" -eq 1 ]]
 	then
@@ -548,7 +556,7 @@ function lock_queue
 
 	elif [[ "$1" == '-u' && "${locked:-0}" -eq 1 ]]
 	then
-		#log -d "Removing lockfile: $lock"
+		log -d "Removing lock..."
 		rmdir "$lock"; locked=0
 	fi
 }
@@ -561,7 +569,7 @@ function holding
 }
 
 # hold_mails [-u] <ID> ...
-hold_mails()
+function hold_mails()
 {
 	local q n f file
 	local -i state=0
@@ -607,7 +615,167 @@ hold_mails()
 	return "$state"
 }
 
+# Background process for inotifywait
+function daemon_worker
+{
+	while true
+	do
+		log -d "Starting inotifywait for queue directory: ${cfg[QUEUE]}"
+		inotifywait -q -m -e 'moved_to' --format '%T %f' --timefmt '%s' "${cfg[QUEUE]}" | daemon_events
+		log -w "inotifywait died with status $?! Restarting in 10 seconds..."
+		sleep 10
+	done
+}
+
+# inotifywait event processor
+function daemon_events
+{
+	local -a event
+	local filename
+	local timestamp
+	local last=''
+
+	while IFS=$'\n' read -r line
+	do
+		read -ra event <<< "$line"
+		timestamp=${event[0]}
+		filename=${event[1]}
+
+		[[ "$filename" =~ ^.+-.+-.+,0$ ]] || continue
+		[[ "$last" == "$timestamp" ]] && continue
+
+		log -d "New event received: $timestamp ($filename)"
+		last=$timestamp
+		sleep 1
+
+		# IMPORTANT: DO NOT REMOVE THIS SUBSHELL!
+		lock_queue && { (run_queue); lock_queue -u; }
+	done
+}
+
+# Periodical queue-run at daemon-mode.
+# Required for further sending attempts.
+function daemon_fallback
+{
+	BASECMD+="-fallback"
+
+	while true
+	do
+		# IMPORTANT: DO NOT REMOVE THIS SUBSHELL!
+		lock_queue && { (run_queue); lock_queue -u; }
+
+		sleep 90
+	done
+}
+
+function example_config
+{
+	echo '############################################################'
+	echo '# msmtp-yaqi example configuration file: ~/.msmtpq.conf    #'
+	echo '#  Looks like Bash but it is a simple plaintext format!    #'
+	echo '############################################################'
+	echo
+	echo '## Path to msmtp binary'
+	echo '#MSMTP=msmtp'
+	echo
+	echo '## Path to queue directory. Relative to $''HOME path!'
+	echo '##   mkdir -v ~/.msmtpq && chmod -c 0700 ~/.msmtpq'
+	echo '#QUEUE=.msmtpq'
+	echo
+	echo '## Path to logfile.'
+	echo '## Relative to $''HOME!'
+	echo '## Disabled by default.'
+	echo '#LOGFILE='
+	echo
+	echo '## Prefixed timestamp format for logfile.'
+	echo '#LOGFILE_TIME_FORMAT=%Y-%m-%d %H:%M:%S'
+	echo
+	echo '## Log to syslog?'
+	echo '## Facility mail.*'
+	echo '#SYSLOG=off'
+	echo
+	echo '## Output log messages to STDERR too?'
+	echo '## Facility: mail.{debug,info,warn,err}'
+	echo '#QUIET=off'
+	echo
+	echo '## Enable all debug messages? (Only for development!)'
+	echo '## Will be logged to file and syslog too if enabled.'
+	echo '#DEBUG=off'
+	echo
+	echo '## Add additional headers at enqueue and while sending?'
+	echo '## Contains enqueue timestamp and internal retry counter.'
+	echo '#HEADER=off'
+	echo
+	echo '## Sent mails archive directory.'
+	echo '## Relative to $''HOME path!'
+	echo '#ARCHIVE='
+	echo
+	echo '## Wait time after failed delivery tries.'
+	echo '## Will be doubled after each failed retry!'
+	echo '## State estimated per message, not globally.'
+	echo '## Always and only calculated by enqueue time.'
+	echo '## Time in seconds. Use "0" to disable it.'
+	echo '#DEFER=300'
+	echo
+	echo '## Count message as undeliverable after <n> retries.'
+	echo '## The message will be deleted from queue and is lost.'
+	echo '## Use "0" to disable this feature. (Not recommended!)'
+	echo '## Estimate your best value: $''((2 ** (<n> - 1) * DEFER))'
+	echo '#UNDEV=12'
+	echo
+	echo '## Maximum elements per run with -r.'
+	echo '## This value is ignored in daemon mode!'
+	echo '## Works only, when DEFER is enabled.'
+	echo '## This feature is disabled by default.'
+	echo '#LIMIT=0'
+	exit 0
+}
+
+function usage_msg
+{
+	stderr "Usage: msmtp-yaqi [sendmail options]"
+	stderr "    or msmtpq [sendmail options]"
+	stderr
+	stderr "    or msmtp-yaqi --q-mgmt <OP> [<ARGS> ...]"
+	stderr "    or msmtp-queue <OP> [<ARGS> ...]"
+	stderr
+	stderr "    or msmtp-yaqi --daemon [-h]"
+	stderr "    or msmtp-queue-daemon [-h]"
+	stderr
+	stderr "Yet Another Queue Implementation for MSMTP"
+	stderr
+	stderr "Sendmail mode:"
+	stderr
+	stderr "  Just send your mail content to STDIN. Your message will"
+	stderr "  be added to the queue. Don't forget to setup a queue-run"
+	stderr "  cronjob or start the built-in daemon! Otherwise your"
+	stderr "  messages will be held forever in queue."
+	stderr
+	stderr "Daemon mode (--daemon):"
+	stderr
+	stderr "  Runs the mail queue every 90 seconds and when new"
+	stderr "  messages are queued. Alternatively use a regular"
+	stderr "  queue-run cronjob: msmtp-yaqi --q-mgmt -r"
+	stderr
+	stderr "Queue management options (--q-mgmt):"
+	stderr
+	stderr "  -f             flush mail queue (force delivery)"
+	stderr "  -r             run mail queue (honor wait times)"
+	stderr "  -R [<ID> ...]  send selected mail(s) from queue"
+	stderr "  -H [<ID> ...]  hold selected mail(s) in queue (do not deliver)"
+	stderr "  -U [<ID> ...]  release selected mail(s) from hold (deliver again)"
+	stderr "  -p [<ID> ...]  purge selected mail(s) from queue"
+	stderr "  -a             purge all mails from queue"
+	stderr "  -n             hold all mails at queue"
+	stderr "  -N             unhold all mails at queue"
+	stderr "  -d             display mails in queue"
+	stderr "  -e             show example config"
+	stderr "  -h             show help message"
+	exit 0
+}
+
 # Trap callback.
+# shellcheck disable=SC2317
 function cleanup
 {
 	declare -g locked
@@ -637,10 +805,17 @@ read_config ~/.msmtpq.conf
 # and delete $queue_file
 trap cleanup EXIT
 
-if [[ "${1:-}" == '--q-mgmt' ]]
+if [[ "$BASECMD" != "msmtp-queue-daemon" && "$BASECMD" != "msmtp-queue" ]]
 then
-	BASECMD=msmtp-queue
-	shift
+	if [[ "${1:-}" == '--daemon' ]]
+	then
+		BASECMD=msmtp-queue-daemon
+		shift
+	elif [[ "${1:-}" == '--q-mgmt' ]]
+	then
+		BASECMD=msmtp-queue
+		shift
+	fi
 fi
 
 # msmtp-queue - queue management mode
@@ -660,96 +835,11 @@ then
 			;;
 
 		e)
-			echo '############################################################'
-			echo '# msmtp-yaqi example configuration file: ~/.msmtpq.conf    #'
-			echo '#  Looks like Bash but it is a simple plaintext format!    #'
-			echo '############################################################'
-			echo
-			echo '## Path to msmtp binary'
-			echo '#MSMTP=msmtp'
-			echo
-			echo '## Path to queue directory. Relative to $''HOME path!'
-			echo '##   mkdir -v ~/.msmtpq && chmod -c 0700 ~/.msmtpq'
-			echo '#QUEUE=.msmtpq'
-			echo
-			echo '## Path to logfile.'
-			echo '## Relative to $''HOME!'
-			echo '## Disabled by default.'
-			echo '#LOGFILE='
-			echo
-			echo '## Prefixed timestamp format for logfile.'
-			echo '#LOGFILE_TIME_FORMAT=%Y-%m-%d %H:%M:%S'
-			echo
-			echo '## Log to syslog?'
-			echo '## Facility mail.*'
-			echo '#SYSLOG=off'
-			echo
-			echo '## Output log messages to STDERR too?'
-			echo '## Facility: mail.{debug,info,warn,err}'
-			echo '#QUIET=off'
-			echo
-			echo '## Enable all debug messages? (Only for development!)'
-			echo '## Will be logged to file and syslog too if enabled.'
-			echo '#DEBUG=off'
-			echo
-			echo '## Add additional headers at enqueue and while sending?'
-			echo '## Contains enqueue timestamp and internal retry counter.'
-			echo '#HEADER=off'
-			echo
-			echo '## Sent mails archive directory.'
-			echo '## Relative to $''HOME path!'
-			echo '#ARCHIVE='
-			echo
-			echo '## Wait time after failed delivery tries.'
-			echo '## Will be doubled after each failed retry!'
-			echo '## State estimated per message, not globally.'
-			echo '## Always and only calculated by enqueue time.'
-			echo '## Time in seconds. Use "0" to disable it.'
-			echo '#DEFER=300'
-			echo
-			echo '## Count message as undeliverable after <n> retries.'
-			echo '## The message will be deleted from queue and is lost.'
-			echo '## Use "0" to disable this feature. (Not recommended!)'
-			echo '## Estimate your best value: $''((2 ** (<n> - 1) * DEFER))'
-			echo '#UNDEV=12'
-			echo
-			echo '## Maximum elements per run with -r.'
-			echo '## Works only, when DEFER is enabled.'
-			echo '## This feature is disabled by default.'
-			echo '#LIMIT=0'
-			exit 0
+			example_config
 			;;
 
 		h)
-			stderr "Usage: msmtpq [sendmail options]"
-			stderr
-			stderr "    or msmtpq --q-mgmt <OP> [<ARGS> ...]"
-			stderr "    or msmtp-queue <OP> [<ARGS> ...]"
-			stderr
-			stderr "Yet Another Queue Implementation for MSMTP"
-			stderr
-			stderr "Sendmail mode:"
-			stderr
-			stderr "  Just send your mail content to STDIN."
-			stderr "  Your message will be added to the queue."
-			stderr "  Don't forget to setup a queue-run cronjob!"
-			stderr "  Otherwise it'll be held forever in queue."
-			stderr
-			stderr "Queue management options:"
-			stderr
-			stderr "  -f             flush mail queue (force delivery)"
-			stderr "  -r             run mail queue (honor wait times)"
-			stderr "  -R [<ID> ...]  send selected mail(s) from queue"
-			stderr "  -H [<ID> ...]  hold selected mail(s) in queue (do not deliver)"
-			stderr "  -U [<ID> ...]  release selected mail(s) from hold (deliver again)"
-			stderr "  -p [<ID> ...]  purge selected mail(s) from queue"
-			stderr "  -a             purge all mails from queue"
-			stderr "  -n             hold all mails at queue"
-			stderr "  -N             unhold all mails at queue"
-			stderr "  -d             display mails in queue"
-			stderr "  -e             show example config"
-			stderr "  -h             show help message"
-			exit 0
+			usage_msg
 			;;
 
 		*)
@@ -777,6 +867,18 @@ then
 
 	esac
 	lock_queue -u
+# msmtp-queue-daemon - daemon mode (inotifywait)
+elif [[ "$BASECMD" == 'msmtp-queue-daemon' ]]
+then
+	[[ "${1:-}" == "-h" ]] && usage_msg
+	[[ -n "$*" ]] && error "Option not supported at daemon mode!" "Try '-h' for more information."
+	[[ "${cfg[LIMIT]}" -ne 0 ]] && { cfg[LIMIT]=0; warning "[WARNING] Configuration variable LIMIT is ignored at daemon mode."; }
+	command -v 'inotifywait' &>/dev/null || error "inotifywait is required for daemon mode! (Maybe package inotify-tools missing?)"
+	command -v "${cfg[MSMTP]}" &>/dev/null || error "${cfg[MSMTP]} binary not found! Install it or change MSMTP config variable."
+	daemon_worker &
+	daemon_fallback
+	ec=1
+# sendmail mode
 else
 	enqueue_mail "$@"
 fi
